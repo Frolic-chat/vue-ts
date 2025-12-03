@@ -1,6 +1,6 @@
 {
   "name": "@frolic/vue-ts",
-  "version": "1.1",
+  "version": "1.1.0",
   "description": "Helper library for precompiling Vue class components; like Vue Class Component for vue 3",
   "main": "index.js",
   "types": "index.d.ts",
