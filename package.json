@@ -3,7 +3,15 @@
   "version": "1.1",
   "description": "Helper library for precompiling Vue class components; like Vue Class Component for vue 3",
   "main": "index.js",
-  "files": [ "dist" ],
+  "types": "index.d.ts",
+  "files": [
+    "transform.js",
+    "transform.d.ts",
+    "index.js",
+    "index.d.ts",
+    "LICENSE",
+    "README.md"
+  ],
   "repository": "https://www.github.com/Frolic-chat/vue-ts",
   "contributors": [
     "Maya",
@@ -17,6 +25,7 @@
     "typescript": "^4.0.0"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepare": "tsc"
   }
 }
