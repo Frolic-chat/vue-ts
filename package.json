@@ -1,14 +1,20 @@
 {
-  "name": "@f-list/vue-ts",
-  "version": "1.0.3",
-  "description": "F-List Helper library for precompiling Vue class components",
+  "name": "@frolic/vue-ts",
+  "version": "1.1",
+  "description": "Helper library for precompiling Vue class components; like Vue Class Component for vue 3",
   "main": "index.js",
-  "repository": "https://www.github.com/f-list/vue-ts",
-  "author": "Maya",
+  "files": [ "dist" ],
+  "repository": "https://www.github.com/Frolic-chat/vue-ts",
+  "contributors": [
+    "Maya",
+    "Fire Under the Mountain (https://github.com/FireUndertheMountain)"
+  ],
   "license": "MIT",
   "dependencies": {
-    "typescript": "^3.2.2",
     "vue": "^2.5.20"
+  },
+  "devDependencies": {
+    "typescript": "^4.0.0"
   },
   "scripts": {
     "build": "tsc"
