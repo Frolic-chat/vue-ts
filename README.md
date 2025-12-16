@@ -1,10 +1,10 @@
-# @f-list/vue-ts
+# @frolic/vue-ts
 This is a little helper library for precompiling Vue class components using a TypeScript transformer.
 
 It is mostly intended for internal usage, and will not necessarily respect SemVer.
 
 ## Usage
-`import '@f-list/vue-ts'` exposes the following decorators:
+`import '@frolic/vue-ts'` exposes the following decorators:
  - `@Component` for classes, accepting an optional `Vue.ComponentOptions` object. Do not use `computed`, `props`, `methods`, `watch`, `data`, or any lifecycle hooks here.
  - `@Prop` for properties, accepting an optional `Vue.PropOptions` object - these will be added to the `props` specification.
  - `@Watch` for methods, accepting a watch expression string and an optional `Vue.WatchOptions` object - these will be added to the `watch` specification.
