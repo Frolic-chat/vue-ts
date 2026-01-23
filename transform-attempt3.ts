@@ -23,14 +23,14 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             const data = copyIfObject(getDecoratorArgument(decorator, 0));
             const computed: {[key: string]: {get?: ts.AccessorDeclaration, set?: ts.AccessorDeclaration}} = {}, watch: {[key: string]: ts.ObjectLiteralExpression[]} = {}, hooks: {[key: string]: ts.Expression[]} = {};
             const methods = ts.createObjectLiteral(), props = ts.createObjectLiteral();
-            createProperty(data, ts.createPropertyAssignment('methods', methods));
-            createProperty(data, ts.createPropertyAssignment('props', props));
+            createProperty(data, ts.factory.createPropertyAssignment('methods', methods));
+            createProperty(data, ts.factory.createPropertyAssignment('props', props));
             const dataObj = ts.createObjectLiteral();
-            createProperty(data, ts.createMethod(undefined, undefined, undefined, 'data', undefined, undefined, [], undefined, ts.createBlock([ts.createReturn(dataObj)])));
+            createProperty(data, ts.createMethod(undefined, undefined, undefined, 'data', undefined, undefined, [], undefined, ts.factory.createBlock([ts.createReturn(dataObj)])));
             const cls = <ts.ClassDeclaration>node;
             const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
             for(const member of cls.members) {
-                if(!member.decorators) member.decorators = ts.createNodeArray();
+                if(!member.decorators) member.decorators = ts.factory.createNodeArray();
                 if(member.modifiers && member.modifiers.some(x => x.kind === ts.SyntaxKind.AbstractKeyword)) continue;
                 if(ts.isAccessor(member)) {
                     const entry = computed[member.name!.getText()] || (computed[member.name!.getText()] = {});
@@ -41,11 +41,11 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                         const propData = copyIfObject(getDecoratorArgument(prop, 0));
                         //if(property.type)
                         //    createProperty(propData, ts.createPropertyAssignment('type', ts.createIdentifier(property.type.getText())));
-                        createProperty(props, ts.createPropertyAssignment(member.name, propData));
+                        createProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
                         continue;
                     }
                     if(member.name.getText().startsWith('$')) continue;
-                    createProperty(dataObj, ts.createPropertyAssignment(member.name, (<ts.PropertyDeclaration>member).initializer || ts.createIdentifier('undefined')))
+                    createProperty(dataObj, ts.factory.createPropertyAssignment(member.name, (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')))
                 } else if(ts.isMethodDeclaration(member)) {
                     function replaceIfSuper(node: ts.Node) {
                         if((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && node.expression.kind === ts.SyntaxKind.SuperKeyword) {
@@ -53,7 +53,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                                 throw new Error('The super keyword is only supported in call expressions.');
                             node.expression = ts.createPropertyAccess(ts.createPropertyAccess(base.expression, 'options'), 'methods');
                             node.parent.expression = ts.createPropertyAccess(node, 'call');
-                            (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.createThis());
+                            (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
                         } else ts.forEachChild(node, replaceIfSuper);
                     }
                     ts.forEachChild(member, replaceIfSuper);
@@ -67,7 +67,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                     const watches = member.decorators!.filter(x => getDecoratorName(x) === 'Watch');
                     for(const watchDecorator of watches) {
                         const watchData = copyIfObject(getDecoratorArgument(watchDecorator, 1));
-                        createProperty(watchData, ts.createPropertyAssignment(ts.createIdentifier('handler'), ts.createStringLiteral(member.name.getText())))
+                        createProperty(watchData, ts.factory.createPropertyAssignment(ts.factory.createIdentifier('handler'), ts.factory.createStringLiteral(member.name.getText())))
                         const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
                         const entry = watch[name] || (watch[name] = []);
                         entry.push(watchData);
@@ -79,7 +79,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             function createIfAny<T>(entries: {[key: string]: T}, name: string, iterator: (key: string, value: T) => ts.Expression) {
                 const keys = Object.keys(entries);
                 if(!keys.length) return;
-                createProperty(data, ts.createPropertyAssignment(name, ts.createObjectLiteral(keys.map(x => ts.createPropertyAssignment(ts.createStringLiteral(x), iterator(x, entries[x]))))));
+                createProperty(data, ts.factory.createPropertyAssignment(name, ts.createObjectLiteral(keys.map(x => ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(x), iterator(x, entries[x]))))));
             }
             createIfAny(computed, 'computed', (key, value) => {
                 if(!value.get) throw new Error("No getter defined for " + key);
@@ -90,14 +90,14 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             })
             createIfAny(watch, 'watch', (_, value) => ts.createArrayLiteral(value));
             for(const hook in hooks) {
-                const block = hooks[hook].map(x => ts.createExpressionStatement(ts.createCall(ts.createPropertyAccess(ts.createElementAccess(ts.createThis(), x), 'apply'), undefined, [ts.createThis(), ts.createIdentifier('arguments')])))
-                createProperty(data, ts.createMethod(undefined, undefined, undefined, hook, undefined, undefined, [], undefined, ts.createBlock(block)));
+                const block = hooks[hook].map(x => ts.factory.createExpressionStatement(ts.createCall(ts.createPropertyAccess(ts.createElementAccess(ts.factory.createThis(), x), 'apply'), undefined, [ts.factory.createThis(), ts.factory.createIdentifier('arguments')])))
+                createProperty(data, ts.createMethod(undefined, undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block)));
             }
 
             return [
-                ts.createVariableStatement([ts.createModifier(ts.SyntaxKind.ConstKeyword)],
-                    [ts.createVariableDeclaration(cls.name!, undefined, ts.createCall(ts.createPropertyAccess(base.expression, ts.createIdentifier('extend')), undefined, [data]))]),
-                ts.createExportDefault(cls.name!)
+                ts.factory.createVariableStatement([ts.factory.createModifier(ts.SyntaxKind.ConstKeyword)],
+                    [ts.factory.createVariableDeclaration(cls.name!, undefined, ts.createCall(ts.createPropertyAccess(base.expression, ts.factory.createIdentifier('extend')), undefined, [data]))]),
+                ts.factory.createExportDefault(cls.name!)
             ];
         }
         return node
