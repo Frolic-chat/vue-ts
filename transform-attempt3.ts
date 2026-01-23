@@ -62,7 +62,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                     for(const hook of hookDecorators) {
                         const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
                         const entry = hooks[name] || (hooks[name] = []);
-                        entry.push(ts.isLiteralExpression(member.name) ? member.name : ts.isIdentifier(member.name) ? ts.createLiteral(member.name) : member.name.expression);
+                        entry.push(ts.isLiteralExpression(member.name) ? member.name : ts.isIdentifier(member.name) ? ts.factory.createStringLiteralFromNode(member.name) : member.name.expression);
                     }
                     const watches = member.decorators!.filter(x => getDecoratorName(x) === 'Watch');
                     for(const watchDecorator of watches) {
@@ -96,7 +96,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
 
             return [
                 ts.factory.createVariableStatement([ts.factory.createModifier(ts.SyntaxKind.ConstKeyword)],
-                    [ts.factory.createVariableDeclaration(cls.name!, undefined, ts.createCall(ts.factory.createPropertyAccessExpression(base.expression, ts.factory.createIdentifier('extend')), undefined, [data]))]),
+                    [ts.factory.createVariableDeclaration(cls.name!, undefined, undefined, ts.factory.createCallExpression(ts.factory.createPropertyAccessExpression(base.expression, ts.factory.createIdentifier('extend')), undefined, [data]))]),
                 ts.factory.createExportDefault(cls.name!)
             ];
         }
