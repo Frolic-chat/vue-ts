@@ -13,7 +13,7 @@ function createProperty(object: ts.ObjectLiteralExpression, expr: ts.ObjectLiter
 }
 
 function copyIfObject(object: ts.Node | undefined) {
-    return ts.createObjectLiteral(object && ts.isObjectLiteralExpression(object) ? object.properties : undefined);
+    return ts.factory.createObjectLiteralExpression(object && ts.isObjectLiteralExpression(object) ? object.properties : undefined);
 }
 
 const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
@@ -22,11 +22,11 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
         if(decorator) {
             const data = copyIfObject(getDecoratorArgument(decorator, 0));
             const computed: {[key: string]: {get?: ts.AccessorDeclaration, set?: ts.AccessorDeclaration}} = {}, watch: {[key: string]: ts.ObjectLiteralExpression[]} = {}, hooks: {[key: string]: ts.Expression[]} = {};
-            const methods = ts.createObjectLiteral(), props = ts.createObjectLiteral();
+            const methods = ts.factory.createObjectLiteralExpression(), props = ts.factory.createObjectLiteralExpression();
             createProperty(data, ts.factory.createPropertyAssignment('methods', methods));
             createProperty(data, ts.factory.createPropertyAssignment('props', props));
-            const dataObj = ts.createObjectLiteral();
-            createProperty(data, ts.createMethod(undefined, undefined, undefined, 'data', undefined, undefined, [], undefined, ts.factory.createBlock([ts.createReturn(dataObj)])));
+            const dataObj = ts.factory.createObjectLiteralExpression();
+            createProperty(data, ts.createMethod(undefined, undefined, undefined, 'data', undefined, undefined, [], undefined, ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)])));
             const cls = <ts.ClassDeclaration>node;
             const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
             for(const member of cls.members) {
@@ -79,16 +79,16 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             function createIfAny<T>(entries: {[key: string]: T}, name: string, iterator: (key: string, value: T) => ts.Expression) {
                 const keys = Object.keys(entries);
                 if(!keys.length) return;
-                createProperty(data, ts.factory.createPropertyAssignment(name, ts.createObjectLiteral(keys.map(x => ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(x), iterator(x, entries[x]))))));
+                createProperty(data, ts.factory.createPropertyAssignment(name, ts.factory.createObjectLiteralExpression(keys.map(x => ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(x), iterator(x, entries[x]))))));
             }
             createIfAny(computed, 'computed', (key, value) => {
                 if(!value.get) throw new Error("No getter defined for " + key);
-                const prop = ts.createObjectLiteral([ts.createMethod(undefined, undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)]);
+                const prop = ts.factory.createObjectLiteralExpression([ts.createMethod(undefined, undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)]);
                 if(value.set)
                     createProperty(prop, ts.createMethod(undefined, undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body))
                 return prop;
             })
-            createIfAny(watch, 'watch', (_, value) => ts.createArrayLiteral(value));
+            createIfAny(watch, 'watch', (_, value) => ts.factory.createArrayLiteralExpression(value));
             for(const hook in hooks) {
                 const block = hooks[hook].map(x => ts.factory.createExpressionStatement(ts.createCall(ts.createPropertyAccess(ts.createElementAccess(ts.factory.createThis(), x), 'apply'), undefined, [ts.factory.createThis(), ts.factory.createIdentifier('arguments')])))
                 createProperty(data, ts.createMethod(undefined, undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block)));
