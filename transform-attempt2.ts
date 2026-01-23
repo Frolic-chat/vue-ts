@@ -12,14 +12,13 @@ function getDecoratorArgument(decorator: ts.Decorator, index: number) {
         : undefined;
 }
 
+/**
+ * Return an object with an updated properties array.
+ */
 function createProperty(object: ts.ObjectLiteralExpression, expr: ts.ObjectLiteralElementLike): ts.ObjectLiteralExpression {
-    const props = object.properties ? Array.from(object.properties) : [];
-    props.push(expr);
+    const new_props = ts.factory.createNodeArray([ ...object.properties, expr ], object.properties.hasTrailingComma);
 
-    // Not sure if preserving comma is important, assume canon object is good
-    const new_props = ts.factory.createNodeArray(props, object.properties.hasTrailingComma);
-
-    return ts.factory.updateObjectLiteralExpression(object, props);
+    return ts.factory.updateObjectLiteralExpression(object, new_props);
 }
 
 function copyIfObject(object: ts.Node | undefined) {
