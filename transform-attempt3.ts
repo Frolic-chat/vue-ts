@@ -26,7 +26,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             createProperty(data, ts.factory.createPropertyAssignment('methods', methods));
             createProperty(data, ts.factory.createPropertyAssignment('props', props));
             const dataObj = ts.factory.createObjectLiteralExpression();
-            createProperty(data, ts.createMethod(undefined, undefined, undefined, 'data', undefined, undefined, [], undefined, ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)])));
+            createProperty(data, ts.factory.createMethodDeclaration(undefined, undefined, 'data', undefined, undefined, [], undefined, ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)])));
             const cls = <ts.ClassDeclaration>node;
             const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
             for(const member of cls.members) {
@@ -51,8 +51,8 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                         if((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && node.expression.kind === ts.SyntaxKind.SuperKeyword) {
                             if(!ts.isCallExpression(node.parent))
                                 throw new Error('The super keyword is only supported in call expressions.');
-                            node.expression = ts.createPropertyAccess(ts.createPropertyAccess(base.expression, 'options'), 'methods');
-                            node.parent.expression = ts.createPropertyAccess(node, 'call');
+                            node.expression = ts.factory.createPropertyAccessExpression(ts.factory.createPropertyAccessExpression(base.expression, 'options'), 'methods');
+                            node.parent.expression = ts.factory.createPropertyAccessExpression(node, 'call');
                             (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
                         } else ts.forEachChild(node, replaceIfSuper);
                     }
@@ -83,20 +83,20 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             }
             createIfAny(computed, 'computed', (key, value) => {
                 if(!value.get) throw new Error("No getter defined for " + key);
-                const prop = ts.factory.createObjectLiteralExpression([ts.createMethod(undefined, undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)]);
+                const prop = ts.factory.createObjectLiteralExpression([ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)]);
                 if(value.set)
-                    createProperty(prop, ts.createMethod(undefined, undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body))
+                    createProperty(prop, ts.factory.createMethodDeclaration(undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body))
                 return prop;
             })
             createIfAny(watch, 'watch', (_, value) => ts.factory.createArrayLiteralExpression(value));
             for(const hook in hooks) {
-                const block = hooks[hook].map(x => ts.factory.createExpressionStatement(ts.createCall(ts.createPropertyAccess(ts.createElementAccess(ts.factory.createThis(), x), 'apply'), undefined, [ts.factory.createThis(), ts.factory.createIdentifier('arguments')])))
-                createProperty(data, ts.createMethod(undefined, undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block)));
+                const block = hooks[hook].map(x => ts.factory.createExpressionStatement(ts.factory.createCallExpression(ts.factory.createPropertyAccessExpression(ts.factory.createElementAccessExpression(ts.factory.createThis(), x), 'apply'), undefined, [ts.factory.createThis(), ts.factory.createIdentifier('arguments')])))
+                createProperty(data, ts.factory.createMethodDeclaration(undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block)));
             }
 
             return [
                 ts.factory.createVariableStatement([ts.factory.createModifier(ts.SyntaxKind.ConstKeyword)],
-                    [ts.factory.createVariableDeclaration(cls.name!, undefined, ts.createCall(ts.createPropertyAccess(base.expression, ts.factory.createIdentifier('extend')), undefined, [data]))]),
+                    [ts.factory.createVariableDeclaration(cls.name!, undefined, ts.createCall(ts.factory.createPropertyAccessExpression(base.expression, ts.factory.createIdentifier('extend')), undefined, [data]))]),
                 ts.factory.createExportDefault(cls.name!)
             ];
         }
