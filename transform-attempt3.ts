@@ -8,7 +8,20 @@ function getDecoratorArgument(decorator: ts.Decorator, index: number) {
     return ts.isCallExpression(decorator.expression) ? decorator.expression.arguments[index] : undefined;
 }
 
-function createProperty(object: ts.ObjectLiteralExpression, expr: ts.ObjectLiteralElementLike) {
+function createProperty(
+    object: ts.ObjectLiteralExpression,
+    expr: ts.ObjectLiteralElementLike,
+): void
+{
+    // Old:
+    // (<ts.ObjectLiteralElementLike[]><unknown>object.properties).push(expr);
+
+    const new_props = ts.factory.createNodeArray([ ...object.properties, expr ]);
+
+    ts.factory.updateObjectLiteralExpression(object, new_props);
+}
+
+function createProperty_old(object: ts.ObjectLiteralExpression, expr: ts.ObjectLiteralElementLike) {
     (<ts.ObjectLiteralElementLike[]><unknown>object.properties).push(expr);
 }
 
@@ -104,7 +117,22 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                             entry.push(watchData);
                         }
                     }
-                    member.decorators = undefined;
+
+                    // When we handle all the decorators, we destroy them.
+                    const member_decorators = ts.canHaveDecorators(member) ? ts.getDecorators(member) : undefined;
+                    if (member_decorators) {
+                        ts.factory.updateMethodDeclaration(
+                            member,
+                            ts.getModifiers(member),
+                            member.asteriskToken,
+                            member.name,
+                            member.questionToken,
+                            member.typeParameters,
+                            member.parameters,
+                            member.type,
+                            member.body
+                        )
+                    }
                 }
             }
 
