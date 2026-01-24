@@ -218,7 +218,7 @@ const visitor: ts.Visitor = node => {
         if (!cls)
             throw new Error('Component found as Class but failed to have the required "heritageClauses" and "members" properties.');
 
-        // Needs fix - assumption of heritageClauses
+        // Needs fix - assertion
         const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
 
         for (const member of cls.members) {
@@ -232,6 +232,7 @@ const visitor: ts.Visitor = node => {
                 continue;
 
             if (ts.isAccessor(member)) {
+                // Needs fix - name assertion
                 const entry = computed[member.name!.getText()] || (computed[member.name!.getText()] = {});
 
                 entry[ ts.isGetAccessor(member) ? 'get' : 'set' ] = member;
@@ -395,6 +396,7 @@ const visitor: ts.Visitor = node => {
                 [ ts.factory.createModifier(ts.SyntaxKind.ConstKeyword) ],
                 [ class_variable ]
             ),
+            // Needs fix - name assertion
             ts.factory.createExportDefault(cls.name!)
         ];
     }
