@@ -181,226 +181,226 @@ const visitor: ts.Visitor = node => {
         ? ts.getDecorators(node)?.filter(x => getDecoratorName(x) === 'Component')[0]
         : undefined;
 
-    if (component_decorator) {
-        const computed: ComputedProperties = {},
-              watch: WatchProperties = {},
-              hooks: HookProperties = {};
+    if (!component_decorator)
+        return node;
 
-        const methods = ts.factory.createObjectLiteralExpression(),
-              props = ts.factory.createObjectLiteralExpression();
+    const computed: ComputedProperties = {},
+             watch: WatchProperties = {},
+             hooks: HookProperties = {};
 
-        // Needs fix
-        // First argument of the component decorator is vue's `data` object; copy the whole thing out to use.
-        const data = copyIfObject(getDecoratorArgument(component_decorator, 0));
+    const methods = ts.factory.createObjectLiteralExpression(),
+            props = ts.factory.createObjectLiteralExpression();
 
-        // Needs fix - returns new node
-        copyWithAddedProperty(data, ts.factory.createPropertyAssignment('methods', methods));
-        // Needs fix - returns new node
-        copyWithAddedProperty(data, ts.factory.createPropertyAssignment('props', props));
+    // Needs fix
+    // First argument of the component decorator is vue's `data` object; copy the whole thing out to use.
+    const data = copyIfObject(getDecoratorArgument(component_decorator, 0));
 
-        // Needs fix - let?
-        const dataObj = ts.factory.createObjectLiteralExpression();
+    // Needs fix - returns new node
+    copyWithAddedProperty(data, ts.factory.createPropertyAssignment('methods', methods));
+    // Needs fix - returns new node
+    copyWithAddedProperty(data, ts.factory.createPropertyAssignment('props', props));
 
-        const return_statement = ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)]);
-        const unknown_method_return = ts.factory.createMethodDeclaration(
-            undefined,  undefined,
-            'data',     undefined,
-            undefined,  [],
-            undefined,  return_statement);
+    // Needs fix - let?
+    const dataObj = ts.factory.createObjectLiteralExpression();
 
-        // Needs fix - returns new node
-        copyWithAddedProperty(data, unknown_method_return);
+    const return_statement = ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)]);
+    const unknown_method_return = ts.factory.createMethodDeclaration(
+        undefined,  undefined,
+        'data',     undefined,
+        undefined,  [],
+        undefined,  return_statement);
 
-        const cls = ('heritageClauses' in node && 'members' in node)
-            ? node as ts.ClassDeclaration
+    // Needs fix - returns new node
+    copyWithAddedProperty(data, unknown_method_return);
+
+    const cls = ('heritageClauses' in node && 'members' in node)
+        ? node as ts.ClassDeclaration
+        : undefined;
+
+    if (!cls)
+        throw new Error('Component found as Class but failed to have the required "heritageClauses" and "members" properties.');
+
+    // Needs fix - assertion
+    const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
+
+    for (const member of cls.members) {
+        const member_modifiers = ts.canHaveModifiers(member)
+            ? ts.getModifiers(member)
             : undefined;
 
-        if (!cls)
-            throw new Error('Component found as Class but failed to have the required "heritageClauses" and "members" properties.');
+        // Abstract members should never be processed
+        // (also handles members with no modifiers)
+        if (member_modifiers?.some(x => x.kind === ts.SyntaxKind.AbstractKeyword))
+            continue;
 
-        // Needs fix - assertion
-        const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
+        if (ts.isAccessor(member)) {
+            // Needs fix - name assertion
+            const entry = computed[member.name!.getText()] || (computed[member.name!.getText()] = {});
 
-        for (const member of cls.members) {
-            const member_modifiers = ts.canHaveModifiers(member)
-                ? ts.getModifiers(member)
+            entry[ ts.isGetAccessor(member) ? 'get' : 'set' ] = member;
+        }
+        else if (ts.isPropertyDeclaration(member)) {
+            const member_decorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)
                 : undefined;
 
-            // Abstract members should never be processed
-            // (also handles members with no modifiers)
-            if (member_modifiers?.some(x => x.kind === ts.SyntaxKind.AbstractKeyword))
-                continue;
+            // If we have a prop decorator, use it. Otherwise continue as normal.
+            const prop = member_decorators?.filter(x => getDecoratorName(x) === 'Prop')[0];
+            if (prop) {
+                const propData = copyIfObject(getDecoratorArgument(prop, 0));
 
-            if (ts.isAccessor(member)) {
-                // Needs fix - name assertion
-                const entry = computed[member.name!.getText()] || (computed[member.name!.getText()] = {});
-
-                entry[ ts.isGetAccessor(member) ? 'get' : 'set' ] = member;
+                // Needs fix
+                copyWithAddedProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
             }
-            else if (ts.isPropertyDeclaration(member)) {
-                const member_decorators = ts.canHaveDecorators(member)
-                    ? ts.getDecorators(member)
-                    : undefined;
+            // Interesting that we process props before $ tagged functions
+            else if (member.name.getText().charAt(0) === '$') {
+                continue; // "Do nothing"
+            }
+            else {
+                const property_assignment = ts.factory.createPropertyAssignment(
+                    member.name,
+                    // Needs fix - assertion of prop declaration
+                    (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')
+                );
 
-                // If we have a prop decorator, use it. Otherwise continue as normal.
-                const prop = member_decorators?.filter(x => getDecoratorName(x) === 'Prop')[0];
-                if (prop) {
-                    const propData = copyIfObject(getDecoratorArgument(prop, 0));
+                // Needs fix - returns new node
+                copyWithAddedProperty(dataObj, property_assignment);
+            }
+        }
+        else if (ts.isMethodDeclaration(member)) {
+            ts.forEachChild(member, node => replaceIfSuper(node, base));
 
-                    // Needs fix
-                    copyWithAddedProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
+            // Needs fix - returns new node
+            copyWithAddedProperty(methods, member);
+
+            const hookDecorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook')
+                : undefined;
+
+            if (hookDecorators) {
+                for (const hook of hookDecorators) {
+                    // Needs fix - assertion not undefined
+                    const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
+
+                    const entry = hooks[name] || (hooks[name] = []);
+
+                    const member_name = ts.isLiteralExpression(member.name)
+                        ? member.name
+                        : ts.isIdentifier(member.name)
+                            ? ts.factory.createStringLiteralFromNode(member.name)
+                            // Needs fix - expression does not exist on this
+                            : member.name.expression;
+
+                    entry.push(member_name);
                 }
-                // Interesting that we process props before $ tagged functions
-                else if (member.name.getText().charAt(0) === '$') {
-                    continue; // "Do nothing"
-                }
-                else {
-                    const property_assignment = ts.factory.createPropertyAssignment(
-                        member.name,
-                        // Needs fix - assertion of prop declaration
-                        (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')
+            }
+
+            const watches = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Watch')
+                : undefined;
+
+            if (watches) {
+                for (const watchDecorator of watches) {
+                    const watch_data = copyIfObject(getDecoratorArgument(watchDecorator, 1));
+
+                    const watch_property = ts.factory.createPropertyAssignment(
+                        ts.factory.createIdentifier('handler'),
+                        ts.factory.createStringLiteral(member.name.getText())
                     );
 
                     // Needs fix - returns new node
-                    copyWithAddedProperty(dataObj, property_assignment);
+                    copyWithAddedProperty(watch_data, watch_property);
+
+                    // Needs fix - assertion not undefined
+                    const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
+
+                    const entry = watch[name] || (watch[name] = []);
+
+                    entry.push(watch_data);
                 }
             }
-            else if (ts.isMethodDeclaration(member)) {
-                ts.forEachChild(member, node => replaceIfSuper(node, base));
 
+            // When we handle all the decorators, we destroy them.
+            // Needs fix - if we create a new object that just doesn't have decorators in the ModifierLikes, that's destruction.
+            const member_decorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)
+                : undefined;
+
+            if (member_decorators) {
                 // Needs fix - returns new node
-                copyWithAddedProperty(methods, member);
-
-                const hookDecorators = ts.canHaveDecorators(member)
-                    ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook')
-                    : undefined;
-
-                if (hookDecorators) {
-                    for (const hook of hookDecorators) {
-                        // Needs fix - assertion string is stringliteral - isn't it?
-                        const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
-
-                        const entry = hooks[name] || (hooks[name] = []);
-
-                        const member_name = ts.isLiteralExpression(member.name)
-                            ? member.name
-                            : ts.isIdentifier(member.name)
-                                ? ts.factory.createStringLiteralFromNode(member.name)
-                                // Needs fix - expression does not exist on this
-                                : member.name.expression;
-
-                        entry.push(member_name);
-                    }
-                }
-
-                const watches = ts.canHaveDecorators(member)
-                    ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Watch')
-                    : undefined;
-
-                if (watches) {
-                    for (const watchDecorator of watches) {
-                        const watchData = copyIfObject(getDecoratorArgument(watchDecorator, 1));
-
-                        // Needs fix - returns new node
-                        copyWithAddedProperty(
-                            watchData,
-                            ts.factory.createPropertyAssignment(
-                                ts.factory.createIdentifier('handler'),
-                                ts.factory.createStringLiteral(member.name.getText())
-                            )
-                        );
-
-                        // Needs fix - assertion string is stringliteral - isn't it?
-                        const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
-
-                        const entry = watch[name] || (watch[name] = []);
-
-                        entry.push(watchData);
-                    }
-                }
-
-                // When we handle all the decorators, we destroy them.
-                // Needs fix - if we create a new object that just doesn't have decorators in the ModifierLikes, that's destruction.
-                const member_decorators = ts.canHaveDecorators(member)
-                    ? ts.getDecorators(member)
-                    : undefined;
-
-                if (member_decorators) {
-                    // Needs fix - returns new node
-                    ts.factory.updateMethodDeclaration(
-                        member,
-                        ts.getModifiers(member),
-                        member.asteriskToken,
-                        member.name,
-                        member.questionToken,
-                        member.typeParameters,
-                        member.parameters,
-                        member.type,
-                        member.body
-                    )
-                }
+                ts.factory.updateMethodDeclaration(
+                    member,
+                    ts.getModifiers(member),
+                    member.asteriskToken,
+                    member.name,
+                    member.questionToken,
+                    member.typeParameters,
+                    member.parameters,
+                    member.type,
+                    member.body
+                )
             }
         }
-
-        // Needs fix - returns new node
-        createIfAny(data, computed, 'computed', handleComputedProperty);
-
-        // Needs fix - returns new node
-        createIfAny(data, watch, 'watch', (_, value) =>
-            ts.factory.createArrayLiteralExpression(value)
-        );
-
-        for (const hook in hooks) {
-            const block = hooks[hook].map(x => {
-                const property_access = ts.factory.createPropertyAccessExpression(
-                    ts.factory.createElementAccessExpression(ts.factory.createThis(), x),
-                    'apply'
-                );
-
-                const args = [
-                    ts.factory.createThis(),
-                    ts.factory.createIdentifier('arguments'),
-                ];
-
-                return ts.factory.createExpressionStatement(
-                    ts.factory.createCallExpression(property_access, undefined, args)
-                );
-            });
-
-            const hook_func = ts.factory.createMethodDeclaration(undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block));
-
-            // Needs fix - returns new node
-            copyWithAddedProperty(data, hook_func);
-        }
-
-        // Return trash
-        const initializer = ts.factory.createCallExpression(
-            ts.factory.createPropertyAccessExpression(
-                base.expression,
-                ts.factory.createIdentifier('extend')
-            ),
-            undefined,
-            [ data ]
-        );
-
-        const class_variable = ts.factory.createVariableDeclaration(
-            // Needs fix - name assertion
-            cls.name!,
-            undefined,
-            undefined,
-            initializer
-        );
-
-        return [
-            ts.factory.createVariableStatement(
-                [ ts.factory.createModifier(ts.SyntaxKind.ConstKeyword) ],
-                [ class_variable ]
-            ),
-            // Needs fix - name assertion
-            ts.factory.createExportDefault(cls.name!)
-        ];
     }
-    return node
+
+    // Needs fix - returns new node
+    createIfAny(data, computed, 'computed', handleComputedProperty);
+
+    // Needs fix - returns new node
+    createIfAny(data, watch, 'watch', (_, value) =>
+        ts.factory.createArrayLiteralExpression(value)
+    );
+
+    // At this point, `hooks` is a good list of our hook members
+    for (const hook in hooks) {
+        const block = hooks[hook].map(x => {
+            const property_access = ts.factory.createPropertyAccessExpression(
+                ts.factory.createElementAccessExpression(ts.factory.createThis(), x),
+                'apply'
+            );
+
+            const args = [
+                ts.factory.createThis(),
+                ts.factory.createIdentifier('arguments'),
+            ];
+
+            return ts.factory.createExpressionStatement(
+                ts.factory.createCallExpression(property_access, undefined, args)
+            );
+        });
+
+        const hook_func = ts.factory.createMethodDeclaration(undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block));
+
+        // Needs fix - returns new node
+        copyWithAddedProperty(data, hook_func);
+    }
+
+    // Return trash
+    const initializer = ts.factory.createCallExpression(
+        ts.factory.createPropertyAccessExpression(
+            base.expression,
+            ts.factory.createIdentifier('extend')
+        ),
+        undefined,
+        [ data ]
+    );
+
+    const class_variable = ts.factory.createVariableDeclaration(
+        // Needs fix - name assertion
+        cls.name!,
+        undefined,
+        undefined,
+        initializer
+    );
+
+    return [
+        ts.factory.createVariableStatement(
+            [ ts.factory.createModifier(ts.SyntaxKind.ConstKeyword) ],
+            [ class_variable ]
+        ),
+        // Needs fix - name assertion
+        ts.factory.createExportDefault(cls.name!)
+    ];
 };
 
 const transformer: ts.TransformerFactory<ts.SourceFile> = context => {
