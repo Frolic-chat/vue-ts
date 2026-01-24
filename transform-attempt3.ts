@@ -30,7 +30,9 @@ function getDecoratorArgument(
     index: number
 ): ts.Expression | undefined
 {
-    return ts.isCallExpression(decorator.expression) ? decorator.expression.arguments[index] : undefined;
+    return ts.isCallExpression(decorator.expression)
+        ? decorator.expression.arguments[index]
+        : undefined;
 }
 
 function createProperty(
@@ -45,10 +47,6 @@ function createProperty(
 
     return ts.factory.updateObjectLiteralExpression(object, new_props);
 }
-
-// function createProperty_old(object: ts.ObjectLiteralExpression, expr: ts.ObjectLiteralElementLike) {
-//     (<ts.ObjectLiteralElementLike[]><unknown>object.properties).push(expr);
-// }
 
 function copyIfObject(
     object: ts.Node | undefined
@@ -77,6 +75,7 @@ function replaceIfSuper(
 
         node.parent.expression = ts.factory.createPropertyAccessExpression(node, 'call');
 
+        // Needs fix
         (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
     }
     else {
