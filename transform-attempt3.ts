@@ -18,7 +18,7 @@ function copyIfObject(object: ts.Node | undefined) {
 
 const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     const visitor: ts.Visitor = (node) => {
-        const decorator = node.decorators && node.decorators.filter(x => getDecoratorName(x) === 'Component')[0];
+        const decorator = ts.canHaveDecorators(node) && ts.getDecorators(node)?.filter(x => getDecoratorName(x) === 'Component')[0];
         if(decorator) {
             const data = copyIfObject(getDecoratorArgument(decorator, 0));
             const computed: {[key: string]: {get?: ts.AccessorDeclaration, set?: ts.AccessorDeclaration}} = {}, watch: {[key: string]: ts.ObjectLiteralExpression[]} = {}, hooks: {[key: string]: ts.Expression[]} = {};
@@ -30,13 +30,17 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
             const cls = <ts.ClassDeclaration>node;
             const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
             for(const member of cls.members) {
-                if(!member.decorators) member.decorators = ts.factory.createNodeArray();
-                if(member.modifiers && member.modifiers.some(x => x.kind === ts.SyntaxKind.AbstractKeyword)) continue;
+                // Seemingly, the right solution is just to not do pointless work. Who would have thought?
+                // Come back to this at some point and see if we can early return.
+                // if(!member.decorators) member.decorators = ts.factory.createNodeArray();
+                const member_modifiers = ts.canHaveModifiers(member) ? ts.getModifiers(member) : undefined;
+                if(member_modifiers?.some(x => x.kind === ts.SyntaxKind.AbstractKeyword)) continue;
                 if(ts.isAccessor(member)) {
                     const entry = computed[member.name!.getText()] || (computed[member.name!.getText()] = {});
                     entry[ts.isGetAccessor(member) ? 'get' : 'set'] = member;
                 } else if(ts.isPropertyDeclaration(member)) {
-                    const prop = member.decorators!.filter(x => getDecoratorName(x) === 'Prop')[0];
+                    const member_decorators = ts.canHaveDecorators(member) ? ts.getDecorators(member) : undefined;
+                    const prop = member_decorators?.filter(x => getDecoratorName(x) === 'Prop')[0];
                     if(prop) {
                         const propData = copyIfObject(getDecoratorArgument(prop, 0));
                         //if(property.type)
@@ -58,19 +62,23 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                     }
                     ts.forEachChild(member, replaceIfSuper);
                     createProperty(methods, member);
-                    const hookDecorators = member.decorators!.filter(x => getDecoratorName(x) === 'Hook');
-                    for(const hook of hookDecorators) {
-                        const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
-                        const entry = hooks[name] || (hooks[name] = []);
-                        entry.push(ts.isLiteralExpression(member.name) ? member.name : ts.isIdentifier(member.name) ? ts.factory.createStringLiteralFromNode(member.name) : member.name.expression);
+                    const hookDecorators = ts.canHaveDecorators(member) ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook') : undefined;
+                    if (hookDecorators) {
+                        for(const hook of hookDecorators) {
+                            const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
+                            const entry = hooks[name] || (hooks[name] = []);
+                            entry.push(ts.isLiteralExpression(member.name) ? member.name : ts.isIdentifier(member.name) ? ts.factory.createStringLiteralFromNode(member.name) : member.name.expression);
+                        }
                     }
-                    const watches = member.decorators!.filter(x => getDecoratorName(x) === 'Watch');
-                    for(const watchDecorator of watches) {
-                        const watchData = copyIfObject(getDecoratorArgument(watchDecorator, 1));
-                        createProperty(watchData, ts.factory.createPropertyAssignment(ts.factory.createIdentifier('handler'), ts.factory.createStringLiteral(member.name.getText())))
-                        const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
-                        const entry = watch[name] || (watch[name] = []);
-                        entry.push(watchData);
+                    const watches = ts.canHaveDecorators(member) ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Watch') : undefined;
+                    if (watches) {
+                        for(const watchDecorator of watches) {
+                            const watchData = copyIfObject(getDecoratorArgument(watchDecorator, 1));
+                            createProperty(watchData, ts.factory.createPropertyAssignment(ts.factory.createIdentifier('handler'), ts.factory.createStringLiteral(member.name.getText())))
+                            const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
+                            const entry = watch[name] || (watch[name] = []);
+                            entry.push(watchData);
+                        }
                     }
                     member.decorators = undefined;
                 }
