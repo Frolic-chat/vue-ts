@@ -16,6 +16,39 @@ function copyIfObject(object: ts.Node | undefined) {
     return ts.factory.createObjectLiteralExpression(object && ts.isObjectLiteralExpression(object) ? object.properties : undefined);
 }
 
+/**
+ * Crawl the node tree replacing calls to super with...?
+ * @param node Root for crawling
+ * @param base Type of `base` is acquired purely by copying TS compiler's suggestion based on usage; possibly it could be expanded.
+ *
+ * @throws Error If `super` keyword is found outside of being called.
+ */
+function replaceIfSuper(
+    node: ts.Node,
+    base: ts.ExpressionWithTypeArguments
+): void
+{
+    if((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && node.expression.kind === ts.SyntaxKind.SuperKeyword) {
+        if(!ts.isCallExpression(node.parent))
+            throw new Error('The super keyword is only supported in call expressions.');
+        node.expression = ts.factory.createPropertyAccessExpression(ts.factory.createPropertyAccessExpression(base.expression, 'options'), 'methods');
+        node.parent.expression = ts.factory.createPropertyAccessExpression(node, 'call');
+        (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
+    } else ts.forEachChild(node, node => replaceIfSuper(node, base));
+}
+
+function createIfAny<T>(
+    object: ts.ObjectLiteralExpression,
+    entries: {[key: string]: T},
+    name: string,
+    iterator: (key: string, value: T) => ts.Expression
+): void
+{
+    const keys = Object.keys(entries);
+    if(!keys.length) return;
+    createProperty(object, ts.factory.createPropertyAssignment(name, ts.factory.createObjectLiteralExpression(keys.map(x => ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(x), iterator(x, entries[x]))))));
+}
+
 const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     const visitor: ts.Visitor = (node) => {
         const decorator = ts.canHaveDecorators(node) && ts.getDecorators(node)?.filter(x => getDecoratorName(x) === 'Component')[0];
@@ -51,16 +84,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                     if(member.name.getText().startsWith('$')) continue;
                     createProperty(dataObj, ts.factory.createPropertyAssignment(member.name, (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')))
                 } else if(ts.isMethodDeclaration(member)) {
-                    function replaceIfSuper(node: ts.Node) {
-                        if((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && node.expression.kind === ts.SyntaxKind.SuperKeyword) {
-                            if(!ts.isCallExpression(node.parent))
-                                throw new Error('The super keyword is only supported in call expressions.');
-                            node.expression = ts.factory.createPropertyAccessExpression(ts.factory.createPropertyAccessExpression(base.expression, 'options'), 'methods');
-                            node.parent.expression = ts.factory.createPropertyAccessExpression(node, 'call');
-                            (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
-                        } else ts.forEachChild(node, replaceIfSuper);
-                    }
-                    ts.forEachChild(member, replaceIfSuper);
+                    ts.forEachChild(member, node => replaceIfSuper(node, base));
                     createProperty(methods, member);
                     const hookDecorators = ts.canHaveDecorators(member) ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook') : undefined;
                     if (hookDecorators) {
@@ -84,19 +108,14 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                 }
             }
 
-            function createIfAny<T>(entries: {[key: string]: T}, name: string, iterator: (key: string, value: T) => ts.Expression) {
-                const keys = Object.keys(entries);
-                if(!keys.length) return;
-                createProperty(data, ts.factory.createPropertyAssignment(name, ts.factory.createObjectLiteralExpression(keys.map(x => ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(x), iterator(x, entries[x]))))));
-            }
-            createIfAny(computed, 'computed', (key, value) => {
+            createIfAny(data, computed, 'computed', (key, value) => {
                 if(!value.get) throw new Error("No getter defined for " + key);
                 const prop = ts.factory.createObjectLiteralExpression([ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)]);
                 if(value.set)
                     createProperty(prop, ts.factory.createMethodDeclaration(undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body))
                 return prop;
             })
-            createIfAny(watch, 'watch', (_, value) => ts.factory.createArrayLiteralExpression(value));
+            createIfAny(data, watch, 'watch', (_, value) => ts.factory.createArrayLiteralExpression(value));
             for(const hook in hooks) {
                 const block = hooks[hook].map(x => ts.factory.createExpressionStatement(ts.factory.createCallExpression(ts.factory.createPropertyAccessExpression(ts.factory.createElementAccessExpression(ts.factory.createThis(), x), 'apply'), undefined, [ts.factory.createThis(), ts.factory.createIdentifier('arguments')])))
                 createProperty(data, ts.factory.createMethodDeclaration(undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block)));
