@@ -4,10 +4,7 @@ import * as ts from 'typescript';
  * TYPES
  */
 type ComputedProperties = {
-    [key: string]: {
-        get?: ts.AccessorDeclaration;
-        set?: ts.AccessorDeclaration;
-    },
+    [key: string]: ComputedProperty,
 };
 
 type WatchProperties = {
@@ -18,13 +15,31 @@ type HookProperties = {
     [key: string]: ts.Expression[];
 };
 
+type ComputedProperty = {
+    get?: ts.AccessorDeclaration;
+    set?: ts.AccessorDeclaration;
+};
+
+/**
+ * Provides deep evaluation of a decorator expression's name.
+ * @param decorator
+ * @returns `getText` of internal expression if this is a call, otherwise `getText` of current expression.
+ */
 function getDecoratorName(
     decorator: ts.Decorator
 ): string
 {
-    return ts.isCallExpression(decorator.expression) ? decorator.expression.expression.getText(decorator.getSourceFile()) : decorator.expression.getText(decorator.getSourceFile());
+    return ts.isCallExpression(decorator.expression)
+        ? decorator.expression.expression.getText(decorator.getSourceFile())
+        : decorator.expression.getText(decorator.getSourceFile());
 }
 
+/**
+ * Evaluates whether decorator is a call and returns an argument from it if it is
+ * @param decorator
+ * @param index argument number to return
+ * @returns Argument `index` of the decorator if its a call expression; otherwise undefined.
+ */
 function getDecoratorArgument(
     decorator: ts.Decorator,
     index: number
@@ -35,7 +50,13 @@ function getDecoratorArgument(
         : undefined;
 }
 
-function createProperty(
+/**
+ * Return a modified version of the provided object with the expression added to its properties.
+ * @param object Base object to copy
+ * @param expr New property to add
+ * @returns New object with `expr` added.
+ */
+function copyWithAddedProperty(
     object: ts.ObjectLiteralExpression,
     expr: ts.ObjectLiteralElementLike,
 ): ts.ObjectLiteralExpression
@@ -48,11 +69,42 @@ function createProperty(
     return ts.factory.updateObjectLiteralExpression(object, new_props);
 }
 
+/**
+ * Provides evaluation of `object | undefined`
+ *
+ * Creates a new object with properties copied from the provided object. If it's not an object, return undefined.
+ * @param object Object to copy properties from
+ * @returns A new object with properties from the provided object; if the object doesn't exist, our copy doesn't exist either.
+ */
 function copyIfObject(
     object: ts.Node | undefined
 ): ts.ObjectLiteralExpression
 {
-    return ts.factory.createObjectLiteralExpression(object && ts.isObjectLiteralExpression(object) ? object.properties : undefined);
+    return ts.factory.createObjectLiteralExpression(
+        object && ts.isObjectLiteralExpression(object)
+            ? object.properties
+            : undefined
+    );
+}
+
+function handleComputedProperty(
+    key: string,
+    value: ComputedProperty
+): ts.Expression
+{
+    if (!value.get)
+        throw new Error("No getter defined for " + key);
+
+    // Add vue getter from computed property
+    const get_func = ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body);
+
+    // Add vue setter from computed property
+    let set_func: ts.MethodDeclaration | undefined;
+    if (value.set) {
+        set_func = ts.factory.createMethodDeclaration(undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body);
+    }
+
+    return ts.factory.createObjectLiteralExpression([ get_func, ...(set_func ? [ set_func ] : []) ]);
 }
 
 /**
@@ -71,11 +123,16 @@ function replaceIfSuper(
         if (!ts.isCallExpression(node.parent))
             throw new Error('The super keyword is only supported in call expressions.');
 
-        node.expression = ts.factory.createPropertyAccessExpression(ts.factory.createPropertyAccessExpression(base.expression, 'options'), 'methods');
+        // Needs fix - expression is readonly
+        node.expression = ts.factory.createPropertyAccessExpression(
+            ts.factory.createPropertyAccessExpression(base.expression, 'options'),
+            'methods'
+        );
 
+        // Needs fix - expression is readonly
         node.parent.expression = ts.factory.createPropertyAccessExpression(node, 'call');
 
-        // Needs fix
+        // Needs fix - remove casts, likely readonly
         (<ts.Expression[]><unknown>node.parent.arguments).unshift(ts.factory.createThis());
     }
     else {
@@ -83,16 +140,24 @@ function replaceIfSuper(
     }
 }
 
+/**
+ * Returns a new object with properties derived from `entries`. Provided iterator function is responsible for converting entries into props.
+ * @param object
+ * @param entries
+ * @param name Name of the new property added to `object`
+ * @param iterator k-v pair => `PropertyAssignment[]`
+ * @returns New object based on provided `object` with new properties derived from `entries`
+ */
 function createIfAny<T>(
     object: ts.ObjectLiteralExpression,
     entries: { [key: string]: T },
     name: string,
     iterator: (key: string, value: T) => ts.Expression
-): void
+): ts.ObjectLiteralExpression | null
 {
     const keys = Object.keys(entries);
     if (!keys.length)
-        return;
+        return null;
 
     const properties = keys.map(x =>
         ts.factory.createPropertyAssignment(
@@ -101,8 +166,8 @@ function createIfAny<T>(
         )
     );
 
-    // Needs fix
-    createProperty(
+    // Needs fix - returns new node
+    return copyWithAddedProperty(
         object,
         ts.factory.createPropertyAssignment(
             name,
@@ -112,11 +177,11 @@ function createIfAny<T>(
 }
 
 const visitor: ts.Visitor = node => {
-    const decorator = ts.canHaveDecorators(node)
+    const component_decorator = ts.canHaveDecorators(node)
         ? ts.getDecorators(node)?.filter(x => getDecoratorName(x) === 'Component')[0]
         : undefined;
 
-    if (decorator) {
+    if (component_decorator) {
         const computed: ComputedProperties = {},
               watch: WatchProperties = {},
               hooks: HookProperties = {};
@@ -124,12 +189,14 @@ const visitor: ts.Visitor = node => {
         const methods = ts.factory.createObjectLiteralExpression(),
               props = ts.factory.createObjectLiteralExpression();
 
-        const data = copyIfObject(getDecoratorArgument(decorator, 0));
+        // Needs fix
+        // First argument of the component decorator is vue's `data` object; copy the whole thing out to use.
+        const data = copyIfObject(getDecoratorArgument(component_decorator, 0));
 
-        // Needs fix
-        createProperty(data, ts.factory.createPropertyAssignment('methods', methods));
-        // Needs fix
-        createProperty(data, ts.factory.createPropertyAssignment('props', props));
+        // Needs fix - returns new node
+        copyWithAddedProperty(data, ts.factory.createPropertyAssignment('methods', methods));
+        // Needs fix - returns new node
+        copyWithAddedProperty(data, ts.factory.createPropertyAssignment('props', props));
 
         // Needs fix - let?
         const dataObj = ts.factory.createObjectLiteralExpression();
@@ -141,13 +208,17 @@ const visitor: ts.Visitor = node => {
             undefined,  [],
             undefined,  return_statement);
 
-        // Needs fix
-        createProperty(data, unknown_method_return);
+        // Needs fix - returns new node
+        copyWithAddedProperty(data, unknown_method_return);
 
-        // Needs fix
-        const cls = <ts.ClassDeclaration>node;
+        const cls = ('heritageClauses' in node && 'members' in node)
+            ? node as ts.ClassDeclaration
+            : undefined;
 
-        // Needs fix
+        if (!cls)
+            throw new Error('Component found as Class but failed to have the required "heritageClauses" and "members" properties.');
+
+        // Needs fix - assumption of heritageClauses
         const base = cls.heritageClauses!.filter(x => x.token == ts.SyntaxKind.ExtendsKeyword)[0].types[0];
 
         for (const member of cls.members) {
@@ -155,6 +226,8 @@ const visitor: ts.Visitor = node => {
                 ? ts.getModifiers(member)
                 : undefined;
 
+            // Abstract members should never be processed
+            // (also handles members with no modifiers)
             if (member_modifiers?.some(x => x.kind === ts.SyntaxKind.AbstractKeyword))
                 continue;
 
@@ -168,34 +241,34 @@ const visitor: ts.Visitor = node => {
                     ? ts.getDecorators(member)
                     : undefined;
 
+                // If we have a prop decorator, use it. Otherwise continue as normal.
                 const prop = member_decorators?.filter(x => getDecoratorName(x) === 'Prop')[0];
-
                 if (prop) {
                     const propData = copyIfObject(getDecoratorArgument(prop, 0));
 
                     // Needs fix
-                    createProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
-
-                    continue;
+                    copyWithAddedProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
                 }
-
                 // Interesting that we process props before $ tagged functions
-                if (member.name.getText().charAt(0) === '$')
-                    continue;
+                else if (member.name.getText().charAt(0) === '$') {
+                    continue; // "Do nothing"
+                }
+                else {
+                    const property_assignment = ts.factory.createPropertyAssignment(
+                        member.name,
+                        // Needs fix - assertion of prop declaration
+                        (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')
+                    );
 
-                const property_assignment = ts.factory.createPropertyAssignment(
-                    member.name,
-                    (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')
-                );
-
-                // Needs fix
-                createProperty(dataObj, property_assignment);
+                    // Needs fix - returns new node
+                    copyWithAddedProperty(dataObj, property_assignment);
+                }
             }
             else if (ts.isMethodDeclaration(member)) {
                 ts.forEachChild(member, node => replaceIfSuper(node, base));
 
-                // Needs fix
-                createProperty(methods, member);
+                // Needs fix - returns new node
+                copyWithAddedProperty(methods, member);
 
                 const hookDecorators = ts.canHaveDecorators(member)
                     ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook')
@@ -203,7 +276,7 @@ const visitor: ts.Visitor = node => {
 
                 if (hookDecorators) {
                     for (const hook of hookDecorators) {
-                        // Needs fix
+                        // Needs fix - assertion string is stringliteral - isn't it?
                         const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
 
                         const entry = hooks[name] || (hooks[name] = []);
@@ -212,6 +285,7 @@ const visitor: ts.Visitor = node => {
                             ? member.name
                             : ts.isIdentifier(member.name)
                                 ? ts.factory.createStringLiteralFromNode(member.name)
+                                // Needs fix - expression does not exist on this
                                 : member.name.expression;
 
                         entry.push(member_name);
@@ -226,8 +300,8 @@ const visitor: ts.Visitor = node => {
                     for (const watchDecorator of watches) {
                         const watchData = copyIfObject(getDecoratorArgument(watchDecorator, 1));
 
-                        // Needs fix
-                        createProperty(
+                        // Needs fix - returns new node
+                        copyWithAddedProperty(
                             watchData,
                             ts.factory.createPropertyAssignment(
                                 ts.factory.createIdentifier('handler'),
@@ -235,6 +309,7 @@ const visitor: ts.Visitor = node => {
                             )
                         );
 
+                        // Needs fix - assertion string is stringliteral - isn't it?
                         const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
 
                         const entry = watch[name] || (watch[name] = []);
@@ -244,12 +319,13 @@ const visitor: ts.Visitor = node => {
                 }
 
                 // When we handle all the decorators, we destroy them.
+                // Needs fix - if we create a new object that just doesn't have decorators in the ModifierLikes, that's destruction.
                 const member_decorators = ts.canHaveDecorators(member)
                     ? ts.getDecorators(member)
                     : undefined;
 
                 if (member_decorators) {
-                    // Needs fix.
+                    // Needs fix - returns new node
                     ts.factory.updateMethodDeclaration(
                         member,
                         ts.getModifiers(member),
@@ -265,67 +341,54 @@ const visitor: ts.Visitor = node => {
             }
         }
 
-        createIfAny(data, computed, 'computed', (key, value) => {
-            if (!value.get)
-                throw new Error("No getter defined for " + key);
+        // Needs fix - returns new node
+        createIfAny(data, computed, 'computed', handleComputedProperty);
 
-            const prop = ts.factory.createObjectLiteralExpression(
-                [
-                    ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], undefined, value.get.body)
-                ]
-            );
-
-            if (value.set) {
-                const vue_set_func = ts.factory.createMethodDeclaration(undefined, undefined, 'set', undefined, undefined, value.set.parameters, undefined, value.set.body);
-
-                // Needs fix
-                createProperty(prop, vue_set_func);
-            }
-
-            return prop;
-        });
-
+        // Needs fix - returns new node
         createIfAny(data, watch, 'watch', (_, value) =>
             ts.factory.createArrayLiteralExpression(value)
         );
 
         for (const hook in hooks) {
-            const block = hooks[hook].map(x =>
-                ts.factory.createExpressionStatement(
-                    ts.factory.createCallExpression(
-                        ts.factory.createPropertyAccessExpression(
-                            ts.factory.createElementAccessExpression(ts.factory.createThis(), x),
-                            'apply'
-                        ),
-                        undefined,
-                        [
-                            ts.factory.createThis(),
-                            ts.factory.createIdentifier('arguments'),
-                        ],
-                    )
-                )
-            );
+            const block = hooks[hook].map(x => {
+                const property_access = ts.factory.createPropertyAccessExpression(
+                    ts.factory.createElementAccessExpression(ts.factory.createThis(), x),
+                    'apply'
+                );
+
+                const args = [
+                    ts.factory.createThis(),
+                    ts.factory.createIdentifier('arguments'),
+                ];
+
+                return ts.factory.createExpressionStatement(
+                    ts.factory.createCallExpression(property_access, undefined, args)
+                );
+            });
 
             const hook_func = ts.factory.createMethodDeclaration(undefined, undefined, hook, undefined, undefined, [], undefined, ts.factory.createBlock(block));
 
-            // Needs fix
-            createProperty(data, hook_func);
+            // Needs fix - returns new node
+            copyWithAddedProperty(data, hook_func);
         }
 
         // Return trash
+        const initializer = ts.factory.createCallExpression(
+            ts.factory.createPropertyAccessExpression(
+                base.expression,
+                ts.factory.createIdentifier('extend')
+            ),
+            undefined,
+            [ data ]
+        );
+
         const class_variable = ts.factory.createVariableDeclaration(
-                    cls.name!,
-                    undefined,
-                    undefined,
-                    ts.factory.createCallExpression(
-                        ts.factory.createPropertyAccessExpression(
-                            base.expression,
-                            ts.factory.createIdentifier('extend')
-                        ),
-                        undefined,
-                        [ data ]
-                    )
-                );
+            // Needs fix - name assertion
+            cls.name!,
+            undefined,
+            undefined,
+            initializer
+        );
 
         return [
             ts.factory.createVariableStatement(
