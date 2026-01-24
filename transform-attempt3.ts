@@ -81,7 +81,7 @@ const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
                         createProperty(props, ts.factory.createPropertyAssignment(member.name, propData));
                         continue;
                     }
-                    if(member.name.getText().startsWith('$')) continue;
+                    if(member.name.getText().charAt(0) === '$') continue;
                     createProperty(dataObj, ts.factory.createPropertyAssignment(member.name, (<ts.PropertyDeclaration>member).initializer || ts.factory.createIdentifier('undefined')))
                 } else if(ts.isMethodDeclaration(member)) {
                     ts.forEachChild(member, node => replaceIfSuper(node, base));
