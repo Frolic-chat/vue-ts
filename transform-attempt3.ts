@@ -146,18 +146,18 @@ function replaceIfSuper(
  * @param entries
  * @param name Name of the new property added to `object`
  * @param iterator k-v pair => `PropertyAssignment[]`
- * @returns New object based on provided `object` with new properties derived from `entries`
+ * @returns Same object is no entries; otherwise new object with new properties
  */
-function createIfAny<T>(
+function addEntriesAsProperties<T>(
     object: ts.ObjectLiteralExpression,
     entries: { [key: string]: T },
     name: string,
     iterator: (key: string, value: T) => ts.Expression
-): ts.ObjectLiteralExpression | null
+): ts.ObjectLiteralExpression
 {
     const keys = Object.keys(entries);
     if (!keys.length)
-        return null;
+        return object;
 
     const properties = keys.map(x =>
         ts.factory.createPropertyAssignment(
@@ -166,7 +166,6 @@ function createIfAny<T>(
         )
     );
 
-    // Needs fix - returns new node
     return copyWithAddedProperty(
         object,
         ts.factory.createPropertyAssignment(
@@ -352,10 +351,10 @@ const visitor: ts.Visitor = node => {
     }
 
     // Needs fix - returns new node
-    createIfAny(data, computed, 'computed', handleComputedProperty);
+    addEntriesAsProperties(data, computed, 'computed', handleComputedProperty);
 
     // Needs fix - returns new node
-    createIfAny(data, watch, 'watch', (_, value) =>
+    addEntriesAsProperties(data, watch, 'watch', (_, value) =>
         ts.factory.createArrayLiteralExpression(value)
     );
 
