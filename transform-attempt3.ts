@@ -279,17 +279,23 @@ const visitor: ts.Visitor = node => {
 
             if (hookDecorators) {
                 for (const hook of hookDecorators) {
-                    // Needs fix - assertion not undefined
-                    const name = (<ts.StringLiteral>getDecoratorArgument(hook, 0)).text;
+                    // Ex: `@Hook('nameArg')`
+                    const nameArg = getDecoratorArgument(hook, 0);
+                    if (!nameArg || !ts.isStringLiteral(nameArg) || !nameArg.text)
+                        throw new Error(`Malformed Hook decorator name: ${nameArg || 'Empty String'}`);
 
-                    const entry = hooks[name] || (hooks[name] = []);
+                    const entry = hooks[nameArg.text] || (hooks[nameArg.text] = []);
 
-                    const member_name = ts.isLiteralExpression(member.name)
-                        ? member.name
-                        : ts.isIdentifier(member.name)
-                            ? ts.factory.createStringLiteralFromNode(member.name)
-                            // Needs fix - expression does not exist on this
-                            : member.name.expression;
+                    let member_name: ts.Expression;
+
+                    if (ts.isLiteralExpression(member.name))
+                        member_name = member.name;
+                    else if (ts.isIdentifier(member.name))
+                        member_name = ts.factory.createStringLiteralFromNode(member.name)
+                    else if (ts.isComputedPropertyName(member.name))
+                        member_name = member.name.expression;
+                    else // if (ts.isPrivateIdentifier(member.name))
+                        member_name = member.name;
 
                     entry.push(member_name);
                 }
@@ -311,10 +317,12 @@ const visitor: ts.Visitor = node => {
                     // Needs fix - returns new node
                     copyWithAddedProperty(watch_data, watch_property);
 
-                    // Needs fix - assertion not undefined
-                    const name = (<ts.StringLiteral>getDecoratorArgument(watchDecorator, 0)).text;
+                    // Ex: `@Watch('nameArg')`
+                    const nameArg = getDecoratorArgument(watchDecorator, 0);
+                    if (!nameArg || !ts.isStringLiteral(nameArg) || !nameArg.text)
+                        throw new Error(`Malformed Hook decorator name: ${nameArg || 'Empty String'}`);
 
-                    const entry = watch[name] || (watch[name] = []);
+                    const entry = hooks[nameArg.text] || (hooks[nameArg.text] = []);
 
                     entry.push(watch_data);
                 }
