@@ -187,20 +187,17 @@ const visitor: ts.Visitor = node => {
              watch: WatchProperties = {},
              hooks: HookProperties = {};
 
-    const methods = ts.factory.createObjectLiteralExpression(),
-            props = ts.factory.createObjectLiteralExpression();
+    let methods = ts.factory.createObjectLiteralExpression(),
+          props = ts.factory.createObjectLiteralExpression();
 
     // Needs fix
     // First argument of the component decorator is vue's `data` object; copy the whole thing out to use.
-    const data = copyIfObject(getDecoratorArgument(component_decorator, 0));
-
-    // Needs fix - returns new node
-    copyWithAddedProperty(data, ts.factory.createPropertyAssignment('methods', methods));
-    // Needs fix - returns new node
-    copyWithAddedProperty(data, ts.factory.createPropertyAssignment('props', props));
+    let data = copyIfObject(getDecoratorArgument(component_decorator, 0));
+    data = copyWithAddedProperty(data, ts.factory.createPropertyAssignment('methods', methods));
+    data = copyWithAddedProperty(data, ts.factory.createPropertyAssignment('props', props));
 
     // Needs fix - let?
-    const dataObj = ts.factory.createObjectLiteralExpression();
+    let dataObj = ts.factory.createObjectLiteralExpression();
 
     const return_statement = ts.factory.createBlock([ts.factory.createReturnStatement(dataObj)]);
     const unknown_method_return = ts.factory.createMethodDeclaration(
@@ -209,8 +206,7 @@ const visitor: ts.Visitor = node => {
         undefined,  [],
         undefined,  return_statement);
 
-    // Needs fix - returns new node
-    copyWithAddedProperty(data, unknown_method_return);
+    data = copyWithAddedProperty(data, unknown_method_return);
 
     const cls = ('heritageClauses' in node && 'members' in node)
         ? node as ts.ClassDeclaration
@@ -263,14 +259,14 @@ const visitor: ts.Visitor = node => {
                 );
 
                 // Needs fix - returns new node
-                copyWithAddedProperty(dataObj, property_assignment);
+                dataObj = copyWithAddedProperty(dataObj, property_assignment);
             }
         }
         else if (ts.isMethodDeclaration(member)) {
             ts.forEachChild(member, node => replaceIfSuper(node, base));
 
             // Needs fix - returns new node
-            copyWithAddedProperty(methods, member);
+            methods = copyWithAddedProperty(methods, member);
 
             const hookDecorators = ts.canHaveDecorators(member)
                 ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook')
@@ -337,7 +333,7 @@ const visitor: ts.Visitor = node => {
                 // Needs fix - returns new node
                 ts.factory.updateMethodDeclaration(
                     member,
-                    ts.getModifiers(member),
+                    ts.getModifiers(member), // Skip inclusion of decorators and we gucci
                     member.asteriskToken,
                     member.name,
                     member.questionToken,
