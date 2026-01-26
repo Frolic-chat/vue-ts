@@ -14,5 +14,6 @@
     "declaration": true,
     "lib": [ "ES2017", "DOM" ]
   },
-  "files": [ "transform.ts", "test/run-transform.ts", "test/test.ts" ]
+  "files": [ "transform.ts" ]
+  // "files": [ "transform.ts", "test/run-transform.ts", "test/test.ts" ]
 }
