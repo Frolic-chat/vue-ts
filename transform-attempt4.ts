@@ -69,7 +69,7 @@ function computedToProperty(
 
     if (get.parameters.length) {
         // nonfatal
-        console.warn(`Parameters on ${key} getter will be ignored.`, "$`code will run here :)`");
+        console.warn(`Parameters on ${key} getter will be ignored.`);
     }
 
     // Add vue getter from computed property
