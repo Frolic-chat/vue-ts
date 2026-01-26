@@ -67,8 +67,10 @@ function computedToProperty(
     if (!get)
         throw new Error(`No getter defined for ${key}`);
 
-    if (get.parameters.length)
+    if (get.parameters.length) {
+        // nonfatal
         console.warn(`Parameters on ${key} getter will be ignored.`, "$`code will run here :)`");
+    }
 
     // Add vue getter from computed property
     const get_func = ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], get.type, get.body);
@@ -142,7 +144,7 @@ function hookToMethod(
             undefined,
             [
                 ts.factory.createThis(),
-                ts.createIdentifier('arguments')
+                ts.factory.createIdentifier('arguments')
             ]
         )
 
@@ -260,11 +262,7 @@ const visitor: ts.Visitor = node => {
             ? ts.getModifiers(member)
             : undefined;
 
-        if (!member_modifiers)
-            continue;
-
-
-        if (member_modifiers.some(mod => mod.kind === ts.SyntaxKind.AbstractKeyword))
+        if (member_modifiers?.some(mod => mod.kind === ts.SyntaxKind.AbstractKeyword))
             continue;
 
         /**
@@ -332,6 +330,7 @@ const visitor: ts.Visitor = node => {
              */
             ts.forEachChild(member, node => {
                 if (ts.isCallExpression(node)) {
+                    // nonfatal
                     console.log(`Elligible for child-might-be-super check: ${node.expression.getText() ?? 'Unknown Left Side'}`);
                 }
                 else {
@@ -467,18 +466,6 @@ const visitor: ts.Visitor = node => {
     const lifecycles = Object.entries(hooksMap)
         .map(([ lifecycle, methods ]) => hookToMethod(lifecycle, methods));
 
-    // 4c. Lifecycle hooks:
-    // We have:
-    //     hooksMap = { lifecycle: [ methodName: function ] }
-    // We want:
-    //     object of {  }
-    //
-
-    dataList.push(computedProperty);
-    dataList.push(watchProperty);
-    dataList.push(...lifecycles);
-
-
     /**
      * Step 5: Avengers assemble!
      */
@@ -512,16 +499,43 @@ const visitor: ts.Visitor = node => {
         ts.factory.createObjectLiteralExpression(methodList)
     )
 
-    const options: ts.ObjectLiteralElementLike[] = [
+    const finalOptionsObject = ts.factory.createObjectLiteralExpression([
         ...existingProperties,  // components
         dataOption,             // data
         propsOption,            // props
-        methodsOptions          // methods
-        // does vue component contain `watch`?
-        // does vue component contain `computed`?
-    ];
+        methodsOptions,         // methods
+        watchProperty,          // watch
+        computedProperty,       // computed
+        ...lifecycles           // hooks
+    ]);
 
-    return ts.factory.createObjectLiteralExpression(options);
+    const const_modifier = ts.factory.createModifier(ts.SyntaxKind.ConstKeyword);
+
+    const base_property = ts.factory.createPropertyAccessExpression(
+        extendsFromVueState.expression,
+        ts.factory.createIdentifier('extend')
+    );
+
+    const call_init = ts.factory.createCallExpression(
+        base_property,
+        undefined,
+        [ finalOptionsObject ]
+    )
+
+    const class_variable = ts.factory.createVariableDeclaration(
+        node.name!,
+        undefined,
+        undefined,
+        call_init
+    );
+
+    return [
+        ts.factory.createVariableStatement(
+            [ const_modifier ],
+            [ class_variable ]
+        ),
+        ts.factory.createExportDefault(node.name!)
+    ];
 };
 
 const transformer: ts.TransformerFactory<ts.SourceFile> = context => {
