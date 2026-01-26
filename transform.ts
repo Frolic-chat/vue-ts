@@ -1,411 +1,545 @@
-import * as ts from "typescript";
+import * as ts from 'typescript';
 
 /**
- * TS4 Vue class decorator -> options transformer
- * No more node mutation allowed (remove decorators instead); use ts.factory to avoid most ts.create* deprecations; various guards
+ * TYPES
  */
+type ComputedProperty = {
+    get?: ts.AccessorDeclaration;
+    set?: ts.AccessorDeclaration;
+};
+
+type ComputedProperties = {
+    [key: string]: ComputedProperty;
+};
+
+type WatchProperties = {
+    [key: string]: ts.ObjectLiteralExpression[];
+};
+
+type HookProperties = {
+    // Could this be less generic?
+    [key: string]: ts.Expression[];
+};
 
 /**
- * Effectively just runs `getText` on the decorator.
+ * Provides deep evaluation of a decorator expression's name.
+ * @param decorator
+ * @returns `getText` of internal expression if this is a call, otherwise `getText` of current expression.
  */
-function getDecoratorName(decorator: ts.Decorator): string | undefined {
-    const expr = decorator.expression;
-
-    if (ts.isCallExpression(expr))
-        return expr.expression.getText(decorator.getSourceFile());
-
-    return expr.getText(decorator.getSourceFile());
-}
-
-function getDecoratorArgument(decorator: ts.Decorator, index: number): ts.Expression | undefined {
+function getDecoratorName(
+    decorator: ts.Decorator
+): string
+{
     const expr = decorator.expression;
 
     return ts.isCallExpression(expr)
-        ? expr.arguments[index]
+        ? expr.expression.getText(decorator.getSourceFile())
+        : expr.getText(decorator.getSourceFile());
+}
+
+/**
+ * Evaluates whether decorator is a call and returns an argument from it if it is
+ * @param decorator
+ * @param index argument number to return
+ * @returns Argument `index` of the decorator if its a call expression; otherwise undefined.
+ */
+function getDecoratorArgument(
+    decorator: ts.Decorator,
+    index: number
+): ts.Expression | undefined
+{
+    return ts.isCallExpression(decorator.expression)
+        ? decorator.expression.arguments[index]
         : undefined;
 }
 
-function isStringLiteralLike(node?: ts.Node): node is ts.StringLiteral {
-    return !!node && ts.isStringLiteral(node);
+/**
+ * Takes a name and getter/setters from a computed map and creates a property assignment
+ * @param key
+ * @param param1
+ * @returns A key: { get, set } property
+ */
+function computedToProperty(
+    key: string,
+    { get, set }: ComputedProperty
+): ts.PropertyAssignment
+{
+    if (!get)
+        throw new Error(`No getter defined for ${key}`);
+
+    if (get.parameters.length) {
+        // nonfatal
+        console.warn(`Parameters on ${key} getter will be ignored.`);
+    }
+
+    // Add vue getter from computed property
+    const get_func = ts.factory.createMethodDeclaration(undefined, undefined, 'get', undefined, undefined, [], get.type, get.body);
+
+    // Add vue setter from computed property
+    let set_func: ts.MethodDeclaration | undefined;
+    if (set) {
+        set_func = ts.factory.createMethodDeclaration(undefined, undefined, 'set', undefined, undefined, set.parameters, set.type, set.body);
+    }
+
+    const method_container = ts.factory.createObjectLiteralExpression(
+        [
+            get_func,
+            ...(set_func ? [ set_func ] : [])
+        ]
+    );
+
+    return ts.factory.createPropertyAssignment(
+        ts.factory.createStringLiteral(key),
+        method_container
+    );
 }
 
 /**
- * Return a new object literal expression which is old.properties + provided extras
- * @param factory
- * @param obj Objec to copy properties from
- * @param prop new properties to add to the object
- * @returns
+ * Takes a name and handler array from a watch map and returns a property assignment
+ * @param key
+ * @param param1
+ * @returns A key: array property
  */
-function appendObjectLiteralProperty(factory: ts.NodeFactory, obj: ts.ObjectLiteralExpression, prop: ts.ObjectLiteralElementLike) {
-    return factory.createObjectLiteralExpression([ ...obj.properties, prop ], true);
+function watchToProperty(
+    key: string,
+    handlers: ts.ObjectLiteralExpression[]
+): ts.PropertyAssignment
+{
+    const array_of_handlers = ts.factory.createArrayLiteralExpression(
+        handlers
+    );
+
+    return ts.factory.createPropertyAssignment(
+        ts.factory.createStringLiteral(key),
+        array_of_handlers
+    )
 }
 
 /**
- * Return a shallow copy of an object literal (or an empty object)
- * @param factory
- * @param node
+ * Perform shenanigans to convert a hook -> (method name)[] map into a call `hook() { method1.apply(); ... }`
+ * @param key
+ * @param param1
  * @returns
  */
-function copyObjectLiteral(factory: ts.NodeFactory, node?: ts.Expression): ts.ObjectLiteralExpression {
-    if (node && ts.isObjectLiteralExpression(node))
-        return factory.createObjectLiteralExpression([ ...node.properties ], true);
-    else
-        return factory.createObjectLiteralExpression([], false);
+function hookToMethod(
+    key: string,
+    methods: ts.Expression[]
+): ts.MethodDeclaration
+{
+    const box_of_apply_calls: ts.ExpressionStatement[] = [];
+
+    for (const method of methods) {
+        const access = ts.factory.createElementAccessExpression(
+            ts.factory.createThis(),
+            method
+        );
+
+        const apply_access = ts.factory.createPropertyAccessExpression(
+            access,
+            'apply'
+        );
+
+        const call_of_apply = ts.factory.createCallExpression(
+            apply_access,
+            undefined,
+            [
+                ts.factory.createThis(),
+                ts.factory.createIdentifier('arguments')
+            ]
+        )
+
+        const final_call = ts.factory.createExpressionStatement(call_of_apply);
+
+        box_of_apply_calls.push(final_call);
+    }
+
+    // Turn the box into a method.
+    const method = ts.factory.createMethodDeclaration(
+        undefined,
+        undefined,
+        key,
+        undefined,
+        undefined,
+        [],
+        undefined,
+        ts.factory.createBlock(box_of_apply_calls)
+    )
+
+    return method;
 }
+
+// function replaceIfSuper(
+//     node: ts.Node,
+//     base: ts.ExpressionWithTypeArguments
+// ): void {
+    // starting at method declaration, loop all children:
+    // find child who matches:
+    // parent: call expression
+    // us (replace-able): (property or element) AND .expression.kind = SuperKeyword
+    // Does not recurse deeper if this is a Super, otherwise recurses.
+// }
+
+
 
 /**
- * Getter for text of a name with extreme case handling and sanitization
- * @param name
- * @returns
+ * Goals of the visitor:
+ * 1. Find component decorator.
+ *
+ * 2. Construct the big six:
+ *    data, methods, props, computed, watch, hooks
+ *
+ * 3. Iterate non-abstract members:
+ *
+ * 3a. get/set, turn into computed.
+ *
+ * 3b. @Prop decorator:
+ *     copy to props (skip $),
+ *     add undefined initializer
+ *
+ * 3c. Methods:
+ *     Replace Super.x() calls
+ *     @Hook decorator:
+ *       Add Hook name -> method alias/wrapper into data object
+ *     @Watch decorator:
+ *       Create handler object
+ *       Add handler to watch object
+ *     Stuff methods into methods object
+ *
+ * 4. Turn collections into actual properties
+ *    computed: object of get/set
+ *    hooks: methods already in data
+ *    watch: watched key(?) to handler[]
+ *
+ * 5. Build 'options' object - merge everything.
+ *
+ * 6. Create replacement class and export as default.
+ *    Return it as replacement node.
  */
-function nameToString(name?: ts.PropertyName): string {
-    if (!name)
-        return "";
-    if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name))
-        return name.text;
-    if (ts.isStringLiteral(name) || ts.isNumericLiteral(name))
-        return name.text;
-    if (ts.isComputedPropertyName(name))
-        return name.expression.getText();
-    // @ts-ignore
-    return name.getText();
-}
+const visitor: ts.Visitor = node => {
+    /**
+     * Step 1: This is a class, right?
+     */
 
-const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
-    const factory = context.factory;
+    const component_decorator = ts.canHaveDecorators(node)
+        ? ts.getDecorators(node)?.find(dec => getDecoratorName(dec) === 'Component')
+        : undefined;
 
-    const visitor: ts.Visitor = (node) => {
-        const decs = ts.canHaveDecorators(node) ? ts.getDecorators(node) : undefined;
-        if (!ts.isClassDeclaration(node) || !decs)
-            return ts.visitEachChild(node, visitor, context);
+    // Type-narrows node to ts.ClassDeclaration
+    if (!component_decorator || !ts.isClassDeclaration(node))
+        return node;
 
-        // region @Component
-        const componentDec = decs.find(d => getDecoratorName(d) === "Component");
-        if (!componentDec)
-            return ts.visitEachChild(node, visitor, context);
+    // Get the left-side of the extends statement or cleanly handle absence of extends.
+    const extendsFromVueState = node.heritageClauses?.find(clause => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
 
-        // optionsObj is the final frontier
-        const componentArg = getDecoratorArgument(componentDec, 0);
-        let optionsObj = copyObjectLiteral(factory, componentArg);
+    if (!extendsFromVueState)
+        throw new Error(`Class component must extend Vue or a Vue component.`);
 
-        const computed: Record<string, { get?: ts.GetAccessorDeclaration; set?: ts.SetAccessorDeclaration }> = {};
-        const watch:    Record<string, ts.ObjectLiteralExpression[]> = {};
-        const hooks:    Record<string, ts.Expression[]> = {};
-        const methods:  ts.MethodDeclaration[]  = [];
-        const props:    ts.PropertyAssignment[] = [];
-        let dataProps:  ts.PropertyAssignment[] = [];
+    /**
+     * Step 2: Boxes to hold things.
+     */
 
-        // Only transform `extends Vue`
-        const extendClause = node.heritageClauses?.find(h => h.token === ts.SyntaxKind.ExtendsKeyword);
-        if (!extendClause?.types.length)
-            return ts.visitEachChild(node, visitor, context);
+    const existing_component_data_arg = getDecoratorArgument(component_decorator, 0);
 
-        const baseType = extendClause.types[0];
-        const baseExpr = baseType.expression; // Vue? Should be vue. Is vue.
+    // AST node array of the options explicitly provided to .
+    const existingProperties = existing_component_data_arg && ts.isObjectLiteralExpression(existing_component_data_arg)
+        ? [ ...(existing_component_data_arg.properties) ]
+        : [];
 
-        for (const member of node.members) {
-            if (member.modifiers?.some(m => m.kind === ts.SyntaxKind.AbstractKeyword))
-                continue;
+    const dataList: ts.ObjectLiteralElementLike[] = [],
+        methodList: ts.ObjectLiteralElementLike[] = [],
+          propList: ts.ObjectLiteralElementLike[] = [];
 
-            // region Computed
-            if (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
-                const key = nameToString(member.name);
-                const entry = computed[key] ?? (computed[key] = {});
+    const computedMap: ComputedProperties = {},
+             watchMap: WatchProperties = {},
+             hooksMap: HookProperties = {};
 
-                if (ts.isGetAccessorDeclaration(member))
-                    entry.get = member;
-                else
-                    entry.set = member;
+    /**
+     * Step 3: Iterate non-abstracts
+     */
 
-                continue;
+    for (const member of node.members) {
+        const member_modifiers = ts.canHaveModifiers(member)
+            ? ts.getModifiers(member)
+            : undefined;
+
+        if (member_modifiers?.some(mod => mod.kind === ts.SyntaxKind.AbstractKeyword))
+            continue;
+
+        /**
+         * Step 3a: Computed properties
+         */
+        if (ts.isAccessor(member)) {
+            const key = member.name.getText();
+
+            const entry = computedMap[key] || (computedMap[key] = {});
+
+            if (ts.isGetAccessor(member))
+                entry.get = member;
+            else // if (ts.isSetAccessor(member))
+                entry.set = member;
+
+            // New methods are created for the getter/setter in the transformer, but the current method is added to the methods object, so do we need to not add to the methods object until after transformation?
+            // Consult the original version of the code for flow.
+        }
+        /**
+         * Step 3b: @Prop decorators, Vue internal properties, and data (undecorated) properties
+         */
+        else if (ts.isPropertyDeclaration(member)) {
+            const member_decorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)
+                : undefined;
+
+            const prop_decorator = member_decorators?.find(dec => getDecoratorName(dec) === 'Prop');
+
+            if (prop_decorator) {
+                const prop_data = getDecoratorArgument(prop_decorator, 0);
+
+                const prop_body = prop_data && ts.isObjectLiteralExpression(prop_data)
+                    ? prop_data
+                    : ts.factory.createObjectLiteralExpression();
+
+                const our_prop = ts.factory.createPropertyAssignment(
+                    member.name,
+                    prop_body
+                );
+
+                propList.push(our_prop);
             }
+            else if (member.name.getText().charAt(0) === '$') {
+                continue; // Skip vue internal data
+            }
+            else {
+                const our_data = ts.factory.createPropertyAssignment(
+                    member.name,
+                    member.initializer ?? ts.factory.createIdentifier('undefined')
+                );
 
-            // property -> props or data property
-            if (ts.isPropertyDeclaration(member)) {
-                const decs = ts.canHaveDecorators(member) ? ts.getDecorators(member) : undefined;
-
-                // region @Prop Decs
-                const propDec = decs?.find(d => getDecoratorName(d) === "Prop");
-
-                if (propDec) {
-                    const arg = getDecoratorArgument(propDec, 0);
-                    const propOptions = copyObjectLiteral(factory, arg);
-                    props.push(factory.createPropertyAssignment(member.name, propOptions));
+                dataList.push(our_data);
+            }
+        }
+        /**
+         * Step 3b: Methods, including @Hook and @Watch decorators
+         */
+        else if (ts.isMethodDeclaration(member)) {
+            /**
+             * Super call replacement goes here.
+             * This should morph the method declaration, and thus we need to track the resulting modified method.
+             * Probably pull out all children one by one? Updating needy children as we encounter them.
+             *
+             * May still need "super is child of expression that isn't a CallExpression" error.
+             */
+            ts.forEachChild(member, node => {
+                if (ts.isCallExpression(node)) {
+                    // nonfatal
+                    console.log(`Elligible for child-might-be-super check: ${node.expression.getText() ?? 'Unknown Left Side'}`);
                 }
                 else {
-                    const nm = nameToString(member.name);
-                    if (nm.startsWith("$"))
-                        continue; // skip $ prefixed internals
-
-                    const init = member.initializer ?? factory.createIdentifier("undefined");
-                    dataProps.push(factory.createPropertyAssignment(member.name, init));
+                    ts.forEachChild(node, _child => undefined /* this function (recurse) */);
                 }
-
-                continue;
-            }
-
-            if (ts.isMethodDeclaration(member)) {
-                function replaceSuperCalls(n: ts.Node): ts.Node {
-                    if (ts.isCallExpression(n) && (ts.isPropertyAccessExpression(n.expression) || ts.isElementAccessExpression(n.expression)) && n.expression.expression.kind === ts.SyntaxKind.SuperKeyword) {
-                        // build access to base.options.methods.someName or base.options.methods[someExpr]
-                        const methodsAccess = factory.createPropertyAccessExpression(
-                            factory.createPropertyAccessExpression(baseExpr, factory.createIdentifier("options")),
-                            factory.createIdentifier("methods")
-                        );
-
-                        let methodAccessExpr: ts.Expression;
-                        if (ts.isPropertyAccessExpression(n.expression))
-                            methodAccessExpr = factory.createPropertyAccessExpression(methodsAccess, n.expression.name);
-                        else
-                            methodAccessExpr = factory.createElementAccessExpression(methodsAccess, n.expression.argumentExpression);
-
-                        const callMember = factory.createPropertyAccessExpression(methodAccessExpr, factory.createIdentifier("call"));
-                        return factory.createCallExpression(callMember, n.typeArguments, [factory.createThis(), ...n.arguments]);
-                    }
-
-                    return ts.visitEachChild(n, replaceSuperCalls, context);
-                }
-
-                const replacedMethod = ts.visitEachChild(member, replaceSuperCalls, context) as ts.MethodDeclaration;
-
-                const mods = replacedMethod.modifiers?.filter(ts.isModifier);
-
-                // rebuilt method without decorators
-                const methodNoDecorators = factory.updateMethodDeclaration(
-                    replacedMethod,
-                    /*decorators*/ undefined,
-                    mods,
-                    replacedMethod.asteriskToken,
-                    replacedMethod.name,
-                    replacedMethod.questionToken,
-                    replacedMethod.typeParameters,
-                    replacedMethod.parameters,
-                    replacedMethod.type,
-                    replacedMethod.body
-                );
-
-                methods.push(methodNoDecorators);
-
-                const decs = ts.canHaveDecorators(member) ? ts.getDecorators(member) : undefined;
-
-                // region @Hook Decs
-                const hookDecs = decs?.filter(d => getDecoratorName(d) === "Hook") ?? [];
-
-                for (const dec of hookDecs) {
-                    const nameArg = getDecoratorArgument(dec, 0);
-                    const hookName = isStringLiteralLike(nameArg) ? nameArg.text : nameToString(member.name);
-
-                    // store a representation we can invoke later (string or expression)
-                    if (ts.isIdentifier(member.name) || ts.isPrivateIdentifier(member.name) || ts.isStringLiteral(member.name) || ts.isNumericLiteral(member.name)) {
-                        hooks[hookName] = hooks[hookName] ?? [];
-                        hooks[hookName].push(factory.createStringLiteral(nameToString(member.name)));
-                    }
-                    else if (ts.isComputedPropertyName(member.name)) {
-                        hooks[hookName] = hooks[hookName] ?? [];
-                        hooks[hookName].push(member.name.expression);
-                    }
-                    else {
-                        hooks[hookName] = hooks[hookName] ?? [];
-                        hooks[hookName].push(factory.createStringLiteral(nameToString(member.name)));
-                    }
-                }
-
-                // region @Watch Decs
-                const watchDecs = decs?.filter(d => getDecoratorName(d) === "Watch") ?? [];
-
-                for (const dec of watchDecs) {
-                    const watchedArg = getDecoratorArgument(dec, 0);
-                    const optsArg = getDecoratorArgument(dec, 1);
-                    const existing = copyObjectLiteral(factory, optsArg);
-                    // add handler property referencing the method name
-                    const handlerAssign = factory.createPropertyAssignment(factory.createIdentifier("handler"), factory.createStringLiteral(nameToString(member.name)));
-                    const merged = appendObjectLiteralProperty(factory, existing, handlerAssign);
-                    const key = isStringLiteralLike(watchedArg) ? watchedArg.text : nameToString(watchedArg as ts.PropertyName);
-                    (watch[key] ??= []).push(merged);
-                }
-
-                continue;
-            }
-        }
-
-        // region Methods/Props
-        const existingMethodsProp = optionsObj.properties.find(p => ts.isPropertyAssignment(p) && p.name && nameToString((p.name as ts.Identifier)) === "methods") as ts.PropertyAssignment | undefined;
-        const existingPropsProp = optionsObj.properties.find(p => ts.isPropertyAssignment(p) && p.name && nameToString((p.name as ts.Identifier)) === "props") as ts.PropertyAssignment | undefined;
-
-        let methodsObj = existingMethodsProp && ts.isObjectLiteralExpression(existingMethodsProp.initializer)
-            ? existingMethodsProp.initializer
-            : factory.createObjectLiteralExpression([], true);
-
-        let propsObj = existingPropsProp && ts.isObjectLiteralExpression(existingPropsProp.initializer)
-            ? existingPropsProp.initializer
-            : factory.createObjectLiteralExpression([], true);
-
-        if (methods.length) {
-            const methodElements: ts.ObjectLiteralElementLike[] = methods.map(m => {
-                const nameNode = ts.isIdentifier(m.name) || ts.isStringLiteral(m.name) || ts.isNumericLiteral(m.name) || ts.isComputedPropertyName(m.name)
-                    ? m.name
-                    : factory.createIdentifier(nameToString(m.name));
-
-                const mods = m.modifiers?.filter(ts.isModifier);
-
-                return factory.createMethodDeclaration(
-                    /*decorators*/ undefined,
-                    mods,
-                    m.asteriskToken,
-                    nameNode,
-                    m.questionToken,
-                    m.typeParameters,
-                    m.parameters,
-                    m.type,
-                    m.body
-                );
             });
 
-            methodsObj = factory.createObjectLiteralExpression([...methodsObj.properties, ...methodElements], true);
-        }
+            const hook_decorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)?.filter(x => getDecoratorName(x) === 'Hook') ?? []
+                : [];
 
-        if (props.length)
-            propsObj = factory.createObjectLiteralExpression([...propsObj.properties, ...props], true);
+            for (const hook of hook_decorators) {
+                const name_arg = getDecoratorArgument(hook, 0);
 
-        // replace (or add) methods and props in optionsObj
-        // remove old methods/props if they exist and rebuild options property list
-        const filteredProps = optionsObj.properties
-            .filter(p => {
-                if (!ts.isPropertyAssignment(p))
-                    return true;
+                if (!name_arg || !ts.isStringLiteral(name_arg) || !name_arg.text)
+                    throw new Error(`Malformed Hook decorator name: ${name_arg?.getText() || 'Empty String'}`);
 
-                const n = nameToString(p.name);
-                return n !== "methods" && n !== "props" && n !== "data";
-            });
+                const lifecycle_key = name_arg.text;
 
-        optionsObj = factory.createObjectLiteralExpression([
-                ...filteredProps,
-                factory.createPropertyAssignment("methods", methodsObj),
-                factory.createPropertyAssignment("props", propsObj),
-            ],
-            true
-        );
+                // lifecycle key -> member.name[] map
+                // (Run all these members on that lifecycle event)
+                const lc_to_namearray_map = hooksMap[lifecycle_key] || (hooksMap[lifecycle_key] = []);
 
-        // data method
-        if (dataProps.length) {
-            const dataFn = factory.createMethodDeclaration(
-                undefined,
-                undefined,
-                undefined,
-                "data",
-                undefined,
-                undefined,
-                [],
-                undefined,
-                factory.createBlock([factory.createReturnStatement(factory.createObjectLiteralExpression(dataProps, true))], true)
+                let member_name: ts.Expression;
+
+                if (ts.isLiteralExpression(member.name))
+                    member_name = member.name;
+                else if (ts.isIdentifier(member.name))
+                    member_name = ts.factory.createStringLiteralFromNode(member.name)
+                else if (ts.isComputedPropertyName(member.name))
+                    member_name = member.name.expression;
+                else // if (ts.isPrivateIdentifier(member.name))
+                    member_name = member.name;
+
+                lc_to_namearray_map.push(member_name);
+            }
+
+            const watch_decorators = ts.canHaveDecorators(member)
+                ? ts.getDecorators(member)?.filter(dec => getDecoratorName(dec) === 'Watch') ?? []
+                : [];
+
+            for (const watch of watch_decorators) {
+                const name_arg = getDecoratorArgument(watch, 0);
+
+                if (!name_arg || !ts.isStringLiteral(name_arg) || !name_arg.text)
+                    throw new Error(`Malformed Watch decorator key: ${name_arg?.getText() || 'Empty String'}`);
+
+                const watched_key = name_arg.text;
+
+                // `handler: <member.name>`
+                const handler_property = ts.factory.createPropertyAssignment(
+                    ts.factory.createIdentifier('handler'),
+                    ts.factory.createStringLiteral(member.name.getText())
+                );
+
+                // `{ immediate: true, deep: true }`
+                const d = getDecoratorArgument(watch, 1);
+                const watch_data = d && ts.isObjectLiteralExpression(d)
+                    ? d
+                    : { properties: [] };
+
+                const handler = ts.factory.createObjectLiteralExpression([
+                    handler_property,
+                    ...watch_data.properties
+                ]);
+
+
+                // watched member key -> handler[] map
+                // (run these handlers when this key is changed)
+                const key_to_handler_map = watchMap[watched_key] || (watchMap[watched_key] = []);
+
+                key_to_handler_map.push(handler);
+            }
+
+            // In the original, we copied member into methods object here.
+            // We still have to do that, but the decorators need to be cleaned.
+            // When the Super-child transformer works, this is a place we can reassemble the modified children.
+            const modified_member = ts.factory.updateMethodDeclaration(
+                member,
+                member.modifiers, // leaving out member.decorators
+                member.asteriskToken,
+                member.name,
+                member.questionToken,
+                member.typeParameters,
+                member.parameters,
+                member.type,
+                member.body
             );
 
-            // append data method (replace if exists)
-            const withoutData = optionsObj.properties.filter(p => !(ts.isPropertyAssignment(p) && nameToString(p.name) === "data"));
-            optionsObj = factory.createObjectLiteralExpression([...withoutData, dataFn], true);
+            methodList.push(modified_member);
         }
+    }
 
-        // region Computed
-        const computedKeys = Object.keys(computed);
-        if (computedKeys.length) {
-            const computedProps: ts.PropertyAssignment[] = computedKeys.map(key => {
-                const entry = computed[key];
-                if (!entry.get)
-                    throw new Error("No getter defined for " + key);
+    /**
+     * 4. Turn collections into actual properties
+     * If we want to COMBINE preexisting data and the data from class structure parsing, that's a bonus feature we haven't implemented. So class will always override whatever was in the preexisting.
+     */
+    // 4a. Computed:
+    // We have:
+    //     computedMap[key] = { get: function, set: function }
+    // We want:
+    //     object of { key: { get, set } }
+    const computed_properties = Object.entries(computedMap)
+        .map(([ key, getAndSet ]) => computedToProperty(key, getAndSet));
 
-                const elProps: ts.ObjectLiteralElementLike[] = [
-                    factory.createMethodDeclaration(undefined, undefined, undefined, "get", undefined, undefined, [], undefined, entry.get.body!),
-                ];
+    // THIS OBJECT is the one we can use during node reconstruction.
+    const computedProperty = ts.factory.createPropertyAssignment(
+        ts.factory.createStringLiteral('computed'),
+        // `name: { get, set }`
+        ts.factory.createObjectLiteralExpression(computed_properties)
+    );
 
-                if (entry.set)
-                    elProps.push(
-                        factory.createMethodDeclaration(undefined, undefined, undefined, "set", undefined, undefined, entry.set.parameters, undefined, entry.set.body!)
-                    );
+    // 4b. Watch:
+    // We have:
+    //     watchMap[key] = { handler: function[], deep: boolean, immediate: boolean }
+    // We want:
+    //     object of { key: { handler, deep, immediate } }
+    //
+    const watched_properties = Object.entries(watchMap)
+        .map(([ key, handlers ]) => watchToProperty(key, handlers));
 
-                return factory.createPropertyAssignment(
-                    factory.createStringLiteral(key),
-                    factory.createObjectLiteralExpression(elProps, true)
-                );
-            });
+    const watchProperty = ts.factory.createPropertyAssignment(
+        ts.factory.createStringLiteral('watch'),
+        ts.factory.createObjectLiteralExpression(watched_properties)
+    );
 
-            optionsObj = appendObjectLiteralProperty(factory, optionsObj, factory.createPropertyAssignment("computed", factory.createObjectLiteralExpression(computedProps, true)));
-        }
+    // 4c. Lifecycle hooks:
+    // We have:
+    //     hooksMap = { lifecycle: [ methodName: function ] }
+    // We want:
+    //     hook() { 1.apply(); 2.apply(); }
+    //
+    const lifecycles = Object.entries(hooksMap)
+        .map(([ lifecycle, methods ]) => hookToMethod(lifecycle, methods));
 
-        // region @Watch
-        const watchKeys = Object.keys(watch);
-        if (watchKeys.length) {
-            const watchProps = watchKeys.map(k => factory.createPropertyAssignment(factory.createStringLiteral(k), factory.createArrayLiteralExpression(watch[k], true)));
+    /**
+     * Step 5: Avengers assemble!
+     */
 
-            optionsObj = appendObjectLiteralProperty(factory, optionsObj, factory.createPropertyAssignment("watch", factory.createObjectLiteralExpression(watchProps, true)));
-        }
+    const data_return = ts.factory.createReturnStatement(
+        ts.factory.createObjectLiteralExpression(dataList)
+    );
 
-        // region @Hook
-        // convert hooks -> methods as God intended
-        for (const hookName of Object.keys(hooks)) {
-            const stmts = hooks[hookName].map(expr => {
-                let elementAccess: ts.Expression;
+    const options_body = ts.factory.createBlock([
+            data_return
+    ]);
 
-                if (ts.isStringLiteral(expr) || ts.isNumericLiteral(expr))
-                    elementAccess = factory.createElementAccessExpression(factory.createThis(), expr);
-                else
-                    elementAccess = factory.createElementAccessExpression(factory.createThis(), expr);
+    const dataOption = ts.factory.createMethodDeclaration(
+        [],
+        undefined,
+        'data',
+        undefined,
+        undefined,
+        [],
+        undefined,
+        options_body
+    );
 
-                return factory.createExpressionStatement(
-                    factory.createCallExpression(
-                        factory.createPropertyAccessExpression(elementAccess, "apply"),
-                        undefined,
-                        [ factory.createThis(), factory.createIdentifier("arguments") ]
-                    )
-                );
-            });
+    const propsOption = ts.factory.createPropertyAssignment(
+        ts.factory.createIdentifier('props'),
+        ts.factory.createObjectLiteralExpression(propList)
+    )
 
-            const hookMethod = factory.createMethodDeclaration(undefined, undefined, undefined, hookName, undefined, undefined, [], undefined, factory.createBlock(stmts, true));
+    const methodsOptions = ts.factory.createPropertyAssignment(
+        ts.factory.createIdentifier('methods'),
+        ts.factory.createObjectLiteralExpression(methodList)
+    )
 
-            optionsObj = appendObjectLiteralProperty(factory, optionsObj, hookMethod);
-        }
+    const finalOptionsObject = ts.factory.createObjectLiteralExpression([
+        ...existingProperties,  // components
+        dataOption,             // data
+        propsOption,            // props
+        methodsOptions,         // methods
+        watchProperty,          // watch
+        computedProperty,       // computed
+        ...lifecycles           // hooks
+    ]);
 
-        // optionsObj is complete. The world is saved.
-        // now build: const <ClassName> = <baseExpr>.extend(optionsObj);
+    const const_modifier = ts.factory.createModifier(ts.SyntaxKind.ConstKeyword);
 
-        if (!node.name) // catch no var name - ts says we can hit this
-            return ts.visitEachChild(node, visitor, context);
+    const base_property = ts.factory.createPropertyAccessExpression(
+        extendsFromVueState.expression,
+        ts.factory.createIdentifier('extend')
+    );
 
-        const classId = node.name;
+    const call_init = ts.factory.createCallExpression(
+        base_property,
+        undefined,
+        [ finalOptionsObject ]
+    )
 
-        const extendCall = factory.createCallExpression(
-            factory.createPropertyAccessExpression(baseExpr as ts.Expression, factory.createIdentifier("extend")),
-            undefined,
-            [ optionsObj ]
-        );
+    const class_variable = ts.factory.createVariableDeclaration(
+        node.name!,
+        undefined,
+        undefined,
+        call_init
+    );
 
-        const varDecl = factory.createVariableStatement(
-            [ factory.createModifier(ts.SyntaxKind.ConstKeyword) ],
-            factory.createVariableDeclarationList(
-                [ factory.createVariableDeclaration(classId, undefined, undefined, extendCall) ],
-                ts.NodeFlags.Const
-            )
-        );
+    return [
+        ts.factory.createVariableStatement(
+            [ const_modifier ],
+            [ class_variable ]
+        ),
+        ts.factory.createExportDefault(node.name!)
+    ];
+};
 
-        const isExport  = node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
-        const isDefault = node.modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword);
-
-        if (isExport && isDefault) {
-            return [ varDecl, factory.createExportDefault(classId) ];
-        }
-        else if (isExport && !isDefault) {
-            const spec = factory.createExportSpecifier(false, undefined, classId);
-            const namedExport = factory.createExportDeclaration(undefined, undefined, false, factory.createNamedExports([ spec ]), undefined);
-
-            return [ varDecl, namedExport ];
-        }
-        else {
-            return varDecl;
-        }
-    };
-
-    return (file) => ts.visitNode(file, function walk(n) {
-        return ts.visitEachChild(n, visitor, context);
-    });
+const transformer: ts.TransformerFactory<ts.SourceFile> = context => {
+    return node => ts.visitEachChild(node, visitor, context);
 };
 
 export default transformer;
