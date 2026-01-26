@@ -4,13 +4,15 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "noEmitHelpers": true,
+    "experimentalDecorators": true,
     "importHelpers": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "noImplicitReturns": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "declaration": true
+    "declaration": true,
+    "lib": [ "ES2017", "DOM" ]
   },
-  "files": ["transform.ts"]
+  "files": [ "transform.ts", "test/run-transform.ts", "test/test.ts" ]
 }
