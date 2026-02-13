@@ -1,7 +1,7 @@
 # @frolic/vue-ts
-This is a little helper library for precompiling Vue class components using a TypeScript transformer.
+This is a little helper library for precompiling Vue 2 class components using a TypeScript transformer.
 
-It is mostly intended for internal usage, and will not necessarily respect SemVer.
+It is intended to continue supporting legacy projects and won't be supported if you use it in a new project.
 
 ## Usage
 `import '@frolic/vue-ts'` exposes the following decorators:
@@ -23,4 +23,4 @@ It can then be added to ts-loader using the `getCustomTransformers: () => ({befo
 For any decorator parameters, make sure to only use literals rather than references.
 While technically syntactically correct and not detected as an error by TypeScript, the transformer is not able to resolve such references, and the resulting behaviour is undefined.
 
-The `super` keyword is only allowed for base method references. The occurrence outside of the expression of a call is treated as an error.
+Do not user `super.*` calls; support was skipped due to lack of necessity in current projects.
